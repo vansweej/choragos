@@ -5,6 +5,9 @@
 //! `CommandRunner` I/O seam, and the orchestrator itself. The MCP server and
 //! CLI binaries are thin adapters over this crate.
 
+pub mod failure;
+pub use failure::FailureClass;
+
 #[cfg(test)]
 mod tests {
     #[test]

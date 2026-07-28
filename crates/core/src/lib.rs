@@ -11,6 +11,9 @@ pub use failure::FailureClass;
 pub mod error;
 pub use error::CoreError;
 
+pub mod config;
+pub use config::Config;
+
 #[cfg(test)]
 mod tests {
     #[test]

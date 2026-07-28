@@ -149,6 +149,11 @@ impl CommandRunner for RealRunner {
     }
 
     async fn create_pr(&self, base: &str, title: &str, body: &str) -> Result<String, CoreError> {
+        // `gh pr create` requires the head branch to already exist on the
+        // remote. Push the current branch first (idempotent: `-u` is safe to
+        // repeat, e.g. on a resumed run where the branch was already pushed).
+        git(&["push", "-u", "origin", "HEAD"]).await?;
+
         let output = tokio::process::Command::new("gh")
             .args([
                 "pr", "create", "--base", base, "--title", title, "--body", body,

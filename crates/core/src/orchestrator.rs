@@ -148,14 +148,25 @@ pub async fn run<R: crate::CommandRunner>(
         match class {
             crate::FailureClass::Green => {
                 if commits_ahead > 0 {
-                    // Open a PR.
+                    // Open a PR. A failure here (e.g. push rejected, gh auth
+                    // issue) must NOT abort the run before the ledger is
+                    // written — the plan itself succeeded, so stay Green and
+                    // surface the PR failure via `reason`. PR creation is a
+                    // sink, same as Telegram: its failure is never fatal to
+                    // a green run.
                     let body = format!(
                         "Automated run of plan `{plan_id}` on branch `{branch}`.",
                         plan_id = slug,
                         branch = branch,
                     );
-                    let url = runner.create_pr("main", &title, &body).await?;
-                    (crate::FailureClass::Green, Some(url), None)
+                    match runner.create_pr("main", &title, &body).await {
+                        Ok(url) => (crate::FailureClass::Green, Some(url), None),
+                        Err(e) => (
+                            crate::FailureClass::Green,
+                            None,
+                            Some(format!("plan succeeded but PR creation failed: {e}")),
+                        ),
+                    }
                 } else {
                     (
                         crate::FailureClass::Green,
@@ -336,6 +347,42 @@ mod tests {
         let ops = runner.branch_ops.lock().unwrap();
         assert_eq!(ops.len(), 1);
         assert!(ops[0].starts_with("create:"));
+    }
+
+    #[tokio::test]
+    async fn green_with_pr_creation_failure_stays_green_and_writes_ledger() {
+        // A create_pr failure (e.g. push rejected, gh auth issue) must NOT
+        // abort the run before the ledger is written. The plan itself
+        // succeeded, so the run stays Green with pr_url None and a reason
+        // describing the PR failure — mirroring how a Telegram failure is
+        // handled: a sink failure is never fatal to a green run.
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(2);
+        runner.set_create_pr_should_fail(true);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run should not hard-fail on a PR creation error");
+
+        assert_eq!(record.failure_class, FailureClass::Green);
+        assert!(record.pr_url.is_none());
+        assert!(
+            record
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("PR creation failed"),
+            "reason should mention the PR failure, got: {:?}",
+            record.reason
+        );
+
+        let ledger = runner.appended_records.lock().unwrap();
+        assert_eq!(ledger.len(), 1, "ledger must still be written");
+        drop(ledger);
+
+        let tg = runner.sent_telegrams.lock().unwrap();
+        assert_eq!(tg.len(), 1, "telegram must still be attempted");
     }
 
     #[tokio::test]

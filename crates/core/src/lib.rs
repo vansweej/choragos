@@ -14,6 +14,9 @@ pub use error::CoreError;
 pub mod config;
 pub use config::Config;
 
+pub mod ledger;
+pub use ledger::LedgerRecord;
+
 #[cfg(test)]
 mod tests {
     #[test]

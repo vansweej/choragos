@@ -71,6 +71,7 @@ impl ChoragosServer {
         let plan_path = args.plan_path.unwrap_or_else(|| "PLAN.md".to_string());
 
         let runner = choragos_core::RealRunner::new(
+            workspace.clone(),
             self.config.ai_coding_monorepo.clone(),
             self.config.telegram_bot_token.clone(),
             self.config.telegram_chat_id.clone(),

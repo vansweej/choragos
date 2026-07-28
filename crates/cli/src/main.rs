@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .to_string();
 
     let runner = choragos_core::RealRunner::new(
+        workspace.clone(),
         config.ai_coding_monorepo.clone(),
         config.telegram_bot_token.clone(),
         config.telegram_chat_id.clone(),

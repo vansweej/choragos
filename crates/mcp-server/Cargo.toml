@@ -1,5 +1,21 @@
 [package]
 name = "choragos-mcp-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "choragos-mcp-server"
+path = "src/main.rs"
+
+[dependencies]
+choragos-core = { path = "../core" }
+tokio = { workspace = true }
+rmcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+anyhow = { workspace = true }
+name = "choragos-mcp-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

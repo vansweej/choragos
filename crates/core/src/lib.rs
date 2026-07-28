@@ -17,6 +17,8 @@ pub use config::Config;
 pub mod ledger;
 pub use ledger::LedgerRecord;
 
+pub mod plan;
+
 #[cfg(test)]
 mod tests {
     #[test]

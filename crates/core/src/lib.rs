@@ -24,6 +24,8 @@ pub use runner::CommandRunner;
 
 pub mod telegram;
 
+pub mod orchestrator;
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -8,6 +8,9 @@
 pub mod failure;
 pub use failure::FailureClass;
 
+pub mod error;
+pub use error::CoreError;
+
 #[cfg(test)]
 mod tests {
     #[test]

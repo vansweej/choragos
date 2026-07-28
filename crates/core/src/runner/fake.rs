@@ -1,0 +1,293 @@
+//! In-process [`FakeRunner`] for use in unit and integration tests.
+
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+use crate::{CommandRunner, CoreError, LedgerRecord};
+
+/// A fully scripted, in-memory [`CommandRunner`] implementation.
+///
+/// All mutable state is guarded by a [`Mutex`] so the runner can be shared
+/// across `async` tasks.  Builder-style setters return `&mut Self` for
+/// convenient chaining.
+#[derive(Debug, Default)]
+pub struct FakeRunner {
+    /// Exit codes to return from successive [`run_plan_cycle`] calls (FIFO).
+    ///
+    /// [`run_plan_cycle`]: CommandRunner::run_plan_cycle
+    exit_codes: Mutex<VecDeque<i32>>,
+    /// Contents returned by [`read_to_string`].
+    ///
+    /// [`read_to_string`]: CommandRunner::read_to_string
+    plan_contents: Mutex<String>,
+    /// Whether [`current_branch`] reports `"main"`.
+    ///
+    /// [`current_branch`]: CommandRunner::current_branch
+    is_on_main: Mutex<bool>,
+    /// Whether [`is_working_tree_clean`] returns `true`.
+    ///
+    /// [`is_working_tree_clean`]: CommandRunner::is_working_tree_clean
+    tree_clean: Mutex<bool>,
+    /// Whether [`local_matches_remote`] returns `true`.
+    ///
+    /// [`local_matches_remote`]: CommandRunner::local_matches_remote
+    local_matches_remote_flag: Mutex<bool>,
+    /// Whether [`branch_exists`] returns `true`.
+    ///
+    /// [`branch_exists`]: CommandRunner::branch_exists
+    branch_exists_flag: Mutex<bool>,
+    /// Value returned by [`head_sha`].
+    ///
+    /// [`head_sha`]: CommandRunner::head_sha
+    scripted_head_sha: Mutex<String>,
+    /// Value returned by [`commits_ahead`].
+    ///
+    /// [`commits_ahead`]: CommandRunner::commits_ahead
+    scripted_commits_ahead: Mutex<u32>,
+    /// Telegram messages recorded by [`send_telegram`].
+    ///
+    /// [`send_telegram`]: CommandRunner::send_telegram
+    pub sent_telegrams: Mutex<Vec<String>>,
+    /// Ledger records recorded by [`append_ledger`].
+    ///
+    /// [`append_ledger`]: CommandRunner::append_ledger
+    pub appended_records: Mutex<Vec<LedgerRecord>>,
+    /// Branch names passed to [`create_branch`] or [`switch_branch`] (in
+    /// call order).
+    ///
+    /// [`create_branch`]: CommandRunner::create_branch
+    /// [`switch_branch`]: CommandRunner::switch_branch
+    pub branch_ops: Mutex<Vec<String>>,
+    /// Whether the post-run tree should appear dirty (used to test the
+    /// pipeline-invariant-violation path).
+    post_run_tree_dirty: Mutex<bool>,
+    /// Call count for `is_working_tree_clean`, used to flip to dirty after
+    /// the first call.
+    clean_call_count: Mutex<u32>,
+}
+
+impl FakeRunner {
+    /// Creates a new [`FakeRunner`] with sensible defaults:
+    ///
+    /// - on `main`, tree clean, local matches remote, branch does not exist
+    /// - `head_sha` = `"sha-base"`, `commits_ahead` = `1`
+    /// - no scripted exit codes (caller must push at least one)
+    pub fn new() -> Self {
+        Self {
+            is_on_main: Mutex::new(true),
+            tree_clean: Mutex::new(true),
+            local_matches_remote_flag: Mutex::new(true),
+            branch_exists_flag: Mutex::new(false),
+            scripted_head_sha: Mutex::new("sha-base".to_string()),
+            scripted_commits_ahead: Mutex::new(1),
+            plan_contents: Mutex::new(
+                "# Feature: test plan\n\nsome body".to_string(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    // ── builder-style setters ────────────────────────────────────────────
+
+    /// Enqueues an exit code to be returned by the next [`run_plan_cycle`]
+    /// call.
+    ///
+    /// [`run_plan_cycle`]: CommandRunner::run_plan_cycle
+    pub fn push_exit_code(&mut self, code: i32) -> &mut Self {
+        self.exit_codes.lock().unwrap().push_back(code);
+        self
+    }
+
+    /// Replaces all queued exit codes.
+    pub fn set_exit_codes(&mut self, codes: impl IntoIterator<Item = i32>) -> &mut Self {
+        let mut q = self.exit_codes.lock().unwrap();
+        q.clear();
+        q.extend(codes);
+        self
+    }
+
+    /// Sets the content returned by [`read_to_string`].
+    ///
+    /// [`read_to_string`]: CommandRunner::read_to_string
+    pub fn set_plan_contents(&mut self, contents: impl Into<String>) -> &mut Self {
+        *self.plan_contents.lock().unwrap() = contents.into();
+        self
+    }
+
+    /// Controls whether [`current_branch`] reports `"main"`.
+    ///
+    /// [`current_branch`]: CommandRunner::current_branch
+    pub fn set_on_main(&mut self, value: bool) -> &mut Self {
+        *self.is_on_main.lock().unwrap() = value;
+        self
+    }
+
+    /// Controls whether [`is_working_tree_clean`] returns `true`.
+    ///
+    /// [`is_working_tree_clean`]: CommandRunner::is_working_tree_clean
+    pub fn set_tree_clean(&mut self, value: bool) -> &mut Self {
+        *self.tree_clean.lock().unwrap() = value;
+        self
+    }
+
+    /// Controls whether [`local_matches_remote`] returns `true`.
+    ///
+    /// [`local_matches_remote`]: CommandRunner::local_matches_remote
+    pub fn set_local_matches_remote(&mut self, value: bool) -> &mut Self {
+        *self.local_matches_remote_flag.lock().unwrap() = value;
+        self
+    }
+
+    /// Controls whether [`branch_exists`] returns `true`.
+    ///
+    /// [`branch_exists`]: CommandRunner::branch_exists
+    pub fn set_branch_exists(&mut self, value: bool) -> &mut Self {
+        *self.branch_exists_flag.lock().unwrap() = value;
+        self
+    }
+
+    /// Sets the value returned by [`head_sha`].
+    ///
+    /// [`head_sha`]: CommandRunner::head_sha
+    pub fn set_head_sha(&mut self, sha: impl Into<String>) -> &mut Self {
+        *self.scripted_head_sha.lock().unwrap() = sha.into();
+        self
+    }
+
+    /// Sets the value returned by [`commits_ahead`].
+    ///
+    /// [`commits_ahead`]: CommandRunner::commits_ahead
+    pub fn set_commits_ahead(&mut self, n: u32) -> &mut Self {
+        *self.scripted_commits_ahead.lock().unwrap() = n;
+        self
+    }
+
+    /// When set to `true`, the tree will appear dirty on the *second* call to
+    /// [`is_working_tree_clean`] (simulating a dirty post-run tree).
+    ///
+    /// [`is_working_tree_clean`]: CommandRunner::is_working_tree_clean
+    pub fn set_post_run_tree_dirty(&mut self, value: bool) -> &mut Self {
+        *self.post_run_tree_dirty.lock().unwrap() = value;
+        self
+    }
+}
+
+impl CommandRunner for FakeRunner {
+    async fn read_to_string(&self, _path: &str) -> Result<String, CoreError> {
+        Ok(self.plan_contents.lock().unwrap().clone())
+    }
+
+    async fn git_fetch(&self, _remote: &str, _branch: &str) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    async fn current_branch(&self) -> Result<String, CoreError> {
+        let on_main = *self.is_on_main.lock().unwrap();
+        if on_main {
+            Ok("main".to_string())
+        } else {
+            Ok("other-branch".to_string())
+        }
+    }
+
+    async fn is_working_tree_clean(&self) -> Result<bool, CoreError> {
+        let mut count = self.clean_call_count.lock().unwrap();
+        *count += 1;
+        let call = *count;
+        drop(count);
+
+        let post_dirty = *self.post_run_tree_dirty.lock().unwrap();
+        // On the second call (post-run check) return dirty when requested.
+        if post_dirty && call >= 2 {
+            return Ok(false);
+        }
+        Ok(*self.tree_clean.lock().unwrap())
+    }
+
+    async fn local_matches_remote(&self, _branch: &str) -> Result<bool, CoreError> {
+        Ok(*self.local_matches_remote_flag.lock().unwrap())
+    }
+
+    async fn branch_exists(&self, _name: &str) -> Result<bool, CoreError> {
+        Ok(*self.branch_exists_flag.lock().unwrap())
+    }
+
+    async fn create_branch(&self, name: &str) -> Result<(), CoreError> {
+        self.branch_ops.lock().unwrap().push(format!("create:{name}"));
+        Ok(())
+    }
+
+    async fn switch_branch(&self, name: &str) -> Result<(), CoreError> {
+        self.branch_ops.lock().unwrap().push(format!("switch:{name}"));
+        Ok(())
+    }
+
+    async fn head_sha(&self) -> Result<String, CoreError> {
+        Ok(self.scripted_head_sha.lock().unwrap().clone())
+    }
+
+    async fn commits_ahead(&self, _base_sha: &str) -> Result<u32, CoreError> {
+        Ok(*self.scripted_commits_ahead.lock().unwrap())
+    }
+
+    async fn run_plan_cycle(
+        &self,
+        _workspace: &str,
+        _plan_path: &str,
+        _profile: &str,
+    ) -> Result<i32, CoreError> {
+        let code = self
+            .exit_codes
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(0);
+        Ok(code)
+    }
+
+    async fn create_pr(
+        &self,
+        _base: &str,
+        _title: &str,
+        _body: &str,
+    ) -> Result<String, CoreError> {
+        Ok("https://github.com/x/y/pull/1".to_string())
+    }
+
+    async fn send_telegram(&self, text: &str) -> Result<(), CoreError> {
+        self.sent_telegrams.lock().unwrap().push(text.to_string());
+        Ok(())
+    }
+
+    async fn append_ledger(&self, record: &LedgerRecord) -> Result<(), CoreError> {
+        self.appended_records.lock().unwrap().push(record.clone());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FakeRunner;
+    use crate::CommandRunner;
+
+    #[tokio::test]
+    async fn scripted_exit_code_is_returned() {
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(2);
+        let code = runner
+            .run_plan_cycle("workspace", "PLAN.md", "default")
+            .await
+            .expect("run_plan_cycle");
+        assert_eq!(code, 2);
+    }
+
+    #[tokio::test]
+    async fn default_exit_code_is_zero_when_queue_empty() {
+        let runner = FakeRunner::new();
+        let code = runner
+            .run_plan_cycle("workspace", "PLAN.md", "default")
+            .await
+            .expect("run_plan_cycle");
+        assert_eq!(code, 0);
+    }
+}

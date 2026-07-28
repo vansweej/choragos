@@ -64,6 +64,11 @@ pub struct FakeRunner {
     /// Call count for `is_working_tree_clean`, used to flip to dirty after
     /// the first call.
     clean_call_count: Mutex<u32>,
+    /// When `true`, [`create_pr`] returns an error instead of a fixed URL
+    /// (used to test the graceful-degradation-on-PR-failure path).
+    ///
+    /// [`create_pr`]: CommandRunner::create_pr
+    create_pr_should_fail: Mutex<bool>,
 }
 
 impl FakeRunner {
@@ -170,6 +175,15 @@ impl FakeRunner {
         *self.post_run_tree_dirty.lock().unwrap() = value;
         self
     }
+
+    /// When set to `true`, [`create_pr`] returns an error instead of a fixed
+    /// URL.
+    ///
+    /// [`create_pr`]: CommandRunner::create_pr
+    pub fn set_create_pr_should_fail(&mut self, value: bool) -> &mut Self {
+        *self.create_pr_should_fail.lock().unwrap() = value;
+        self
+    }
 }
 
 impl CommandRunner for FakeRunner {
@@ -247,6 +261,12 @@ impl CommandRunner for FakeRunner {
     }
 
     async fn create_pr(&self, _base: &str, _title: &str, _body: &str) -> Result<String, CoreError> {
+        if *self.create_pr_should_fail.lock().unwrap() {
+            return Err(CoreError::Command {
+                context: "gh pr create".to_string(),
+                message: "aborted: you must first push the current branch to a remote".to_string(),
+            });
+        }
         Ok("https://github.com/x/y/pull/1".to_string())
     }
 

@@ -1,7 +1,12 @@
 [package]
 name = "choragos-mcp-server"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 
 [[bin]]
 name = "choragos-mcp-server"
@@ -15,15 +20,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 anyhow = { workspace = true }
-name = "choragos-mcp-server"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
 
-[[bin]]
-name = "choragos-mcp-server"
-path = "src/main.rs"
-
-[dependencies]
-choragos-core = { path = "../core" }

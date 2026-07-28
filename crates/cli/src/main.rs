@@ -36,7 +36,7 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let config = choragos_core::Config::from_env()?;
+    let config = choragos_core::config::from_env()?;
 
     let workspace = std::env::current_dir()?;
     let repo = workspace

@@ -19,10 +19,7 @@ pub fn render(record: &LedgerRecord) -> String {
     let outcome_line = match &record.pr_url {
         Some(url) => format!("PR: {url}"),
         None => {
-            let reason = record
-                .reason
-                .as_deref()
-                .unwrap_or("(no reason given)");
+            let reason = record.reason.as_deref().unwrap_or("(no reason given)");
             format!("reason: {reason}")
         }
     };
@@ -69,7 +66,10 @@ mod tests {
         record.pr_url = Some("https://github.com/x/y/pull/42".to_string());
         let msg = render(&record);
         assert!(msg.starts_with("🟢"), "expected green emoji, got: {msg}");
-        assert!(msg.contains("PR: https://github.com/x/y/pull/42"), "expected PR line, got: {msg}");
+        assert!(
+            msg.contains("PR: https://github.com/x/y/pull/42"),
+            "expected PR line, got: {msg}"
+        );
     }
 
     #[test]
@@ -79,7 +79,10 @@ mod tests {
         record.reason = Some("max attempts reached".to_string());
         let msg = render(&record);
         assert!(msg.starts_with("🟠"), "expected orange emoji, got: {msg}");
-        assert!(msg.contains("reason: max attempts reached"), "expected reason line, got: {msg}");
+        assert!(
+            msg.contains("reason: max attempts reached"),
+            "expected reason line, got: {msg}"
+        );
     }
 
     #[test]
@@ -89,6 +92,9 @@ mod tests {
         record.reason = Some("hard failure".to_string());
         let msg = render(&record);
         assert!(msg.starts_with("🔴"), "expected red emoji, got: {msg}");
-        assert!(msg.contains("reason: hard failure"), "expected reason line, got: {msg}");
+        assert!(
+            msg.contains("reason: hard failure"),
+            "expected reason line, got: {msg}"
+        );
     }
 }

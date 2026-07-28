@@ -111,7 +111,9 @@ impl CommandRunner for RealRunner {
 
     async fn commits_ahead(&self, base_sha: &str) -> Result<u32, CoreError> {
         let range = format!("{base_sha}..HEAD");
-        let raw = git(&["rev-list", "--count", &range]).await.unwrap_or_default();
+        let raw = git(&["rev-list", "--count", &range])
+            .await
+            .unwrap_or_default();
         Ok(raw.trim().parse::<u32>().unwrap_or(0))
     }
 
@@ -146,14 +148,11 @@ impl CommandRunner for RealRunner {
         Ok(status.code().unwrap_or(3))
     }
 
-    async fn create_pr(
-        &self,
-        base: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<String, CoreError> {
+    async fn create_pr(&self, base: &str, title: &str, body: &str) -> Result<String, CoreError> {
         let output = tokio::process::Command::new("gh")
-            .args(["pr", "create", "--base", base, "--title", title, "--body", body])
+            .args([
+                "pr", "create", "--base", base, "--title", title, "--body", body,
+            ])
             .output()
             .await
             .map_err(|e| CoreError::Command {

@@ -3,11 +3,10 @@
 
 use anyhow::Result;
 use rmcp::{
-    model::{CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
-    schemars,
-    tool, tool_handler, tool_router,
-    handler::server::tool::ToolRouter,
-    ServerHandler,
+    handler::server::router::tool::ToolRouter,
+    handler::server::wrapper::Parameters,
+    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
 use serde::Deserialize;
 
@@ -28,9 +27,11 @@ pub struct RunPlanArgs {
 }
 
 /// The choragos MCP server.
+#[derive(Clone)]
 pub struct ChoragosServer {
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
-    config: choragos_core::Config,
+    config: std::sync::Arc<choragos_core::Config>,
 }
 
 #[tool_router]
@@ -39,18 +40,20 @@ impl ChoragosServer {
     pub fn new(config: choragos_core::Config) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            config,
+            config: std::sync::Arc::new(config),
         }
     }
 
     /// Runs the choragos plan-cycle orchestrator and returns the ledger record.
-    #[tool(description = "Run the choragos plan-cycle orchestrator. Branches feat/<slug>, executes the ai-coding plan-cycle, opens a PR on a green run with commits, and returns the LedgerRecord as JSON.")]
+    #[tool(
+        description = "Run the choragos plan-cycle orchestrator. Branches feat/<slug>, executes the ai-coding plan-cycle, opens a PR on a green run with commits, and returns the LedgerRecord as JSON."
+    )]
     async fn choragos_run_plan(
         &self,
-        #[tool(aggr)] args: RunPlanArgs,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(args): Parameters<RunPlanArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let workspace = std::env::current_dir()
-            .map_err(|e| rmcp::Error::internal_error(e.to_string(), None))?;
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         let repo = workspace
             .file_name()
@@ -60,7 +63,9 @@ impl ChoragosServer {
 
         let workspace_str = workspace
             .to_str()
-            .ok_or_else(|| rmcp::Error::internal_error("non-UTF-8 workspace path".to_string(), None))?
+            .ok_or_else(|| {
+                rmcp::ErrorData::internal_error("non-UTF-8 workspace path".to_string(), None)
+            })?
             .to_string();
 
         let plan_path = args.plan_path.unwrap_or_else(|| "PLAN.md".to_string());
@@ -81,10 +86,10 @@ impl ChoragosServer {
 
         let record = choragos_core::orchestrator::run(&runner, &self.config, inputs)
             .await
-            .map_err(|e| rmcp::Error::internal_error(e.to_string(), None))?;
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         let json = serde_json::to_string(&record)
-            .map_err(|e| rmcp::Error::internal_error(e.to_string(), None))?;
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -93,32 +98,20 @@ impl ChoragosServer {
 #[tool_handler]
 impl ServerHandler for ChoragosServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-            server_info: Implementation {
-                name: "choragos-mcp-server".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-            instructions: Some(
-                "Use choragos_run_plan to run the plan-cycle orchestrator. \
-                 The tool branches, runs ai-coding, opens a PR on success, \
-                 and returns a JSON LedgerRecord."
-                    .to_string(),
-            ),
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "Use choragos_run_plan to run the plan-cycle orchestrator. \
+             The tool branches, runs ai-coding, opens a PR on success, \
+             and returns a JSON LedgerRecord.",
+        )
     }
 }
 
 #[cfg(not(tarpaulin_include))]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = choragos_core::Config::from_env()?;
+    let config = choragos_core::config::from_env()?;
     let server = ChoragosServer::new(config);
-    let transport = rmcp::transport::stdio();
-    let ct = rmcp::service::serve_server(server, transport).await?;
-    ct.waiting().await?;
+    let service = server.serve(rmcp::transport::stdio()).await?;
+    service.waiting().await?;
     Ok(())
 }

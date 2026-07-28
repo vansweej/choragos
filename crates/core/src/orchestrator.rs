@@ -137,9 +137,7 @@ pub async fn run<R: crate::CommandRunner>(
     let commits_ahead = runner.commits_ahead(&base_sha).await?;
 
     // Post-run invariant: green exit but dirty tree → Red override.
-    let (failure_class, pr_url, reason) = if code == 0
-        && !runner.is_working_tree_clean().await?
-    {
+    let (failure_class, pr_url, reason) = if code == 0 && !runner.is_working_tree_clean().await? {
         (
             crate::FailureClass::Red,
             None,
@@ -317,7 +315,6 @@ mod tests {
         let mut runner = FakeRunner::new();
         runner.push_exit_code(0);
         runner.set_commits_ahead(2);
-        runner.set_head_sha("sha-head");
 
         let record = run(&runner, &test_cfg(3), test_inputs())
             .await
@@ -377,11 +374,7 @@ mod tests {
         assert_eq!(record.failure_class, FailureClass::Red);
         assert!(record.pr_url.is_none());
         assert!(
-            record
-                .reason
-                .as_deref()
-                .unwrap_or("")
-                .contains("dirty"),
+            record.reason.as_deref().unwrap_or("").contains("dirty"),
             "reason should mention dirty tree"
         );
 

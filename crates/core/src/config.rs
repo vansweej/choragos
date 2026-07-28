@@ -37,9 +37,7 @@ pub fn from_getter<F: Fn(&str) -> Option<String>>(get: F) -> Result<Config, crat
     let max_attempts = match get("CHORAGOS_MAX_ATTEMPTS") {
         None => 3,
         Some(raw) => raw.parse::<u32>().map_err(|_| {
-            crate::CoreError::Message(format!(
-                "CHORAGOS_MAX_ATTEMPTS is not a valid u32: {raw:?}"
-            ))
+            crate::CoreError::Message(format!("CHORAGOS_MAX_ATTEMPTS is not a valid u32: {raw:?}"))
         })?,
     };
 

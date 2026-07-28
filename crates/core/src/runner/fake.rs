@@ -80,9 +80,7 @@ impl FakeRunner {
             branch_exists_flag: Mutex::new(false),
             scripted_head_sha: Mutex::new("sha-base".to_string()),
             scripted_commits_ahead: Mutex::new(1),
-            plan_contents: Mutex::new(
-                "# Feature: test plan\n\nsome body".to_string(),
-            ),
+            plan_contents: Mutex::new("# Feature: test plan\n\nsome body".to_string()),
             ..Default::default()
         }
     }
@@ -100,9 +98,11 @@ impl FakeRunner {
 
     /// Replaces all queued exit codes.
     pub fn set_exit_codes(&mut self, codes: impl IntoIterator<Item = i32>) -> &mut Self {
-        let mut q = self.exit_codes.lock().unwrap();
-        q.clear();
-        q.extend(codes);
+        {
+            let mut q = self.exit_codes.lock().unwrap();
+            q.clear();
+            q.extend(codes);
+        }
         self
     }
 
@@ -213,12 +213,18 @@ impl CommandRunner for FakeRunner {
     }
 
     async fn create_branch(&self, name: &str) -> Result<(), CoreError> {
-        self.branch_ops.lock().unwrap().push(format!("create:{name}"));
+        self.branch_ops
+            .lock()
+            .unwrap()
+            .push(format!("create:{name}"));
         Ok(())
     }
 
     async fn switch_branch(&self, name: &str) -> Result<(), CoreError> {
-        self.branch_ops.lock().unwrap().push(format!("switch:{name}"));
+        self.branch_ops
+            .lock()
+            .unwrap()
+            .push(format!("switch:{name}"));
         Ok(())
     }
 
@@ -236,21 +242,11 @@ impl CommandRunner for FakeRunner {
         _plan_path: &str,
         _profile: &str,
     ) -> Result<i32, CoreError> {
-        let code = self
-            .exit_codes
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(0);
+        let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
         Ok(code)
     }
 
-    async fn create_pr(
-        &self,
-        _base: &str,
-        _title: &str,
-        _body: &str,
-    ) -> Result<String, CoreError> {
+    async fn create_pr(&self, _base: &str, _title: &str, _body: &str) -> Result<String, CoreError> {
         Ok("https://github.com/x/y/pull/1".to_string())
     }
 

@@ -57,10 +57,7 @@ mod tests {
     #[test]
     fn parse_title_strips_feature_prefix() {
         let md = "# Feature: choragos v1 — MCP!\n\nSome body text.";
-        assert_eq!(
-            parse_title(md).as_deref(),
-            Some("choragos v1 — MCP!")
-        );
+        assert_eq!(parse_title(md).as_deref(), Some("choragos v1 — MCP!"));
     }
 
     #[test]

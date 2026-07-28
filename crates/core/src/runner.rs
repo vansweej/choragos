@@ -28,14 +28,10 @@ pub trait CommandRunner: Send + Sync {
     ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
 
     /// Returns the name of the currently checked-out branch.
-    fn current_branch(
-        &self,
-    ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
+    fn current_branch(&self) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
 
     /// Returns `true` when the working tree has no uncommitted changes.
-    fn is_working_tree_clean(
-        &self,
-    ) -> impl Future<Output = Result<bool, crate::CoreError>> + Send;
+    fn is_working_tree_clean(&self) -> impl Future<Output = Result<bool, crate::CoreError>> + Send;
 
     /// Returns `true` when the local `branch` tip matches its remote
     /// counterpart.
@@ -63,9 +59,7 @@ pub trait CommandRunner: Send + Sync {
     ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
 
     /// Returns the SHA of `HEAD`.
-    fn head_sha(
-        &self,
-    ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
+    fn head_sha(&self) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
 
     /// Returns the number of commits on `HEAD` that are not reachable from
     /// `base_sha`.

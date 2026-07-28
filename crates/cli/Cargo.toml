@@ -11,3 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 choragos-core = { path = "../core" }
+tokio = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+choragos-core = { path = "../core" }

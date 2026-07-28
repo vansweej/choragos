@@ -5,9 +5,19 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
+
 [[bin]]
 name = "choragos-mcp-server"
 path = "src/main.rs"
 
 [dependencies]
 choragos-core = { path = "../core" }
+tokio = { workspace = true }
+rmcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+anyhow = { workspace = true }
+

@@ -36,6 +36,10 @@
           nativeBuildInputs = [
             pkgs.pkg-config
             pkgs.makeWrapper
+            # `cargo test` runs in this derivation's checkPhase, which needs
+            # `git` on PATH for the real_runner git_integration_tests (they
+            # drive the real git binary against throwaway TempDir repos).
+            pkgs.git
           ];
           buildInputs = [ ];
 

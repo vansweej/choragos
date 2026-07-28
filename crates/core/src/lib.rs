@@ -26,6 +26,11 @@ pub mod telegram;
 
 pub mod orchestrator;
 
+#[cfg(not(tarpaulin_include))]
+pub mod real_runner;
+#[cfg(not(tarpaulin_include))]
+pub use real_runner::RealRunner;
+
 #[cfg(test)]
 mod tests {
     #[test]

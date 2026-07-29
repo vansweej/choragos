@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     let inputs = choragos_core::orchestrator::RunInputs {
         workspace: workspace_str,
         repo,
-        plan_path: args.plan,
+        plan_ref: args.plan,
         profile: args.profile,
         slug_override: args.slug,
     };

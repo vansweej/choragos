@@ -62,7 +62,23 @@ pub trait Vcs: Send + Sync {
         base_sha: &str,
     ) -> impl Future<Output = Result<u32, crate::CoreError>> + Send;
 
+    /// Pushes the current branch (`HEAD`) to `origin`, creating the upstream
+    /// ref. Idempotent: safe to call again on a resumed run.
+    fn push_head(&self) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
+
+    /// Looks up an existing open pull request for `branch`, returning its
+    /// URL if one exists. Used to make PR creation idempotent: a resumed run
+    /// should reuse an already-open PR rather than fail or duplicate it.
+    fn find_pr(
+        &self,
+        branch: &str,
+    ) -> impl Future<Output = Result<Option<String>, crate::CoreError>> + Send;
+
     /// Creates a pull request and returns its URL.
+    ///
+    /// Callers are responsible for pushing the branch first via
+    /// [`push_head`](Vcs::push_head) — this method only invokes `gh pr
+    /// create` and does not push.
     fn create_pr(
         &self,
         base: &str,

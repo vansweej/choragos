@@ -38,19 +38,6 @@ impl RealRunner {
             telegram_chat_id,
         }
     }
-
-    /// Pushes the current branch to `origin`, creating the upstream ref.
-    ///
-    /// Split out from [`create_pr`] so the push — the part that actually
-    /// touches git state — is exercised by the integration tests, while the
-    /// `gh` invocation stays the only untested outer edge. Idempotent: `-u`
-    /// is safe to repeat on a resumed run.
-    ///
-    /// [`create_pr`]: CommandRunner::create_pr
-    async fn push_head(&self) -> Result<(), CoreError> {
-        git_in(&self.workdir, &["push", "-u", "origin", "HEAD"]).await?;
-        Ok(())
-    }
 }
 
 /// Runs a `git` sub-command in `dir` and returns its trimmed stdout.
@@ -163,10 +150,8 @@ impl Vcs for RealRunner {
     }
 
     async fn create_pr(&self, base: &str, title: &str, body: &str) -> Result<String, CoreError> {
-        // `gh pr create` requires the head branch to already exist on the
-        // remote, so push first (covered by the integration tests).
-        self.push_head().await?;
-
+        // Callers push the branch first (see `Vcs::push_head`); this method
+        // only invokes `gh pr create`.
         let output = tokio::process::Command::new("gh")
             .current_dir(&self.workdir)
             .args([
@@ -186,6 +171,42 @@ impl Vcs for RealRunner {
                 context: "gh pr create".to_string(),
                 message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             })
+        }
+    }
+
+    /// Pushes the current branch to `origin`, creating the upstream ref.
+    ///
+    /// Split out so the push — the part that actually touches git state — is
+    /// exercised by the integration tests, while the `gh` invocation stays
+    /// the only untested outer edge. Idempotent: `-u` is safe to repeat on a
+    /// resumed run.
+    async fn push_head(&self) -> Result<(), CoreError> {
+        git_in(&self.workdir, &["push", "-u", "origin", "HEAD"]).await?;
+        Ok(())
+    }
+
+    async fn find_pr(&self, branch: &str) -> Result<Option<String>, CoreError> {
+        let output = tokio::process::Command::new("gh")
+            .current_dir(&self.workdir)
+            .args(["pr", "view", branch, "--json", "url", "-q", ".url"])
+            .output()
+            .await
+            .map_err(|e| CoreError::Command {
+                context: "gh pr view".to_string(),
+                message: e.to_string(),
+            })?;
+
+        if output.status.success() {
+            let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if url.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(url))
+            }
+        } else {
+            // `gh pr view` exits non-zero when no PR exists for the branch —
+            // that is not an error condition here.
+            Ok(None)
         }
     }
 }

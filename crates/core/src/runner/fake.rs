@@ -93,6 +93,20 @@ pub struct FakeRunner {
     ///
     /// [`cleanup_session`]: CommandRunner::cleanup_session
     pub sessions_cleaned: Mutex<Vec<String>>,
+    /// Value returned by [`find_pr`] (`None` unless scripted via
+    /// [`set_existing_pr`]).
+    ///
+    /// [`find_pr`]: Vcs::find_pr
+    /// [`set_existing_pr`]: FakeRunner::set_existing_pr
+    existing_pr: Mutex<Option<String>>,
+    /// Number of times [`push_head`] was called.
+    ///
+    /// [`push_head`]: Vcs::push_head
+    pub push_head_calls: Mutex<u32>,
+    /// Number of times [`create_pr`] was called.
+    ///
+    /// [`create_pr`]: Vcs::create_pr
+    pub create_pr_calls: Mutex<u32>,
 }
 
 impl FakeRunner {
@@ -232,6 +246,15 @@ impl FakeRunner {
         *self.cleanup_should_fail.lock().unwrap() = value;
         self
     }
+
+    /// Scripts [`find_pr`] to return `Some(url)` for an already-open PR, or
+    /// `None` (the default) when no PR exists yet.
+    ///
+    /// [`find_pr`]: Vcs::find_pr
+    pub fn set_existing_pr(&mut self, url: Option<impl Into<String>>) -> &mut Self {
+        *self.existing_pr.lock().unwrap() = url.map(Into::into);
+        self
+    }
 }
 
 impl Memory for FakeRunner {
@@ -340,6 +363,7 @@ impl Vcs for FakeRunner {
     }
 
     async fn create_pr(&self, _base: &str, _title: &str, _body: &str) -> Result<String, CoreError> {
+        *self.create_pr_calls.lock().unwrap() += 1;
         if *self.create_pr_should_fail.lock().unwrap() {
             return Err(CoreError::Command {
                 context: "gh pr create".to_string(),
@@ -347,6 +371,15 @@ impl Vcs for FakeRunner {
             });
         }
         Ok("https://github.com/x/y/pull/1".to_string())
+    }
+
+    async fn push_head(&self) -> Result<(), CoreError> {
+        *self.push_head_calls.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    async fn find_pr(&self, _branch: &str) -> Result<Option<String>, CoreError> {
+        Ok(self.existing_pr.lock().unwrap().clone())
     }
 }
 

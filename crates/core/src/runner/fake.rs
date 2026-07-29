@@ -16,9 +16,9 @@ pub struct FakeRunner {
     ///
     /// [`run_plan_cycle`]: CommandRunner::run_plan_cycle
     exit_codes: Mutex<VecDeque<i32>>,
-    /// Contents returned by [`read_to_string`].
+    /// Contents returned by [`fetch_plan`].
     ///
-    /// [`read_to_string`]: CommandRunner::read_to_string
+    /// [`fetch_plan`]: CommandRunner::fetch_plan
     plan_contents: Mutex<String>,
     /// Whether [`current_branch`] reports `"main"`.
     ///
@@ -69,6 +69,30 @@ pub struct FakeRunner {
     ///
     /// [`create_pr`]: CommandRunner::create_pr
     create_pr_should_fail: Mutex<bool>,
+    /// When `true`, [`fetch_plan`] returns an error.
+    ///
+    /// [`fetch_plan`]: CommandRunner::fetch_plan
+    fetch_plan_should_fail: Mutex<bool>,
+    /// When `true`, [`begin_session`] returns an error.
+    ///
+    /// [`begin_session`]: CommandRunner::begin_session
+    begin_session_should_fail: Mutex<bool>,
+    /// When `true`, [`cleanup_session`] returns an error.
+    ///
+    /// [`cleanup_session`]: CommandRunner::cleanup_session
+    cleanup_should_fail: Mutex<bool>,
+    /// Plan refs passed to [`begin_session`] (in call order).
+    ///
+    /// [`begin_session`]: CommandRunner::begin_session
+    pub sessions_begun: Mutex<Vec<String>>,
+    /// `(session, text)` pairs recorded by [`note_progress`].
+    ///
+    /// [`note_progress`]: CommandRunner::note_progress
+    pub progress_notes: Mutex<Vec<(String, String)>>,
+    /// Session ids passed to [`cleanup_session`] (in call order).
+    ///
+    /// [`cleanup_session`]: CommandRunner::cleanup_session
+    pub sessions_cleaned: Mutex<Vec<String>>,
 }
 
 impl FakeRunner {
@@ -111,10 +135,10 @@ impl FakeRunner {
         self
     }
 
-    /// Sets the content returned by [`read_to_string`].
+    /// Sets the content returned by [`fetch_plan`].
     ///
-    /// [`read_to_string`]: CommandRunner::read_to_string
-    pub fn set_plan_contents(&mut self, contents: impl Into<String>) -> &mut Self {
+    /// [`fetch_plan`]: CommandRunner::fetch_plan
+    pub fn set_fetched_plan(&mut self, contents: impl Into<String>) -> &mut Self {
         *self.plan_contents.lock().unwrap() = contents.into();
         self
     }
@@ -184,11 +208,74 @@ impl FakeRunner {
         *self.create_pr_should_fail.lock().unwrap() = value;
         self
     }
+
+    /// When set to `true`, [`fetch_plan`] returns an error.
+    ///
+    /// [`fetch_plan`]: CommandRunner::fetch_plan
+    pub fn set_fetch_plan_should_fail(&mut self, value: bool) -> &mut Self {
+        *self.fetch_plan_should_fail.lock().unwrap() = value;
+        self
+    }
+
+    /// When set to `true`, [`begin_session`] returns an error.
+    ///
+    /// [`begin_session`]: CommandRunner::begin_session
+    pub fn set_begin_session_should_fail(&mut self, value: bool) -> &mut Self {
+        *self.begin_session_should_fail.lock().unwrap() = value;
+        self
+    }
+
+    /// When set to `true`, [`cleanup_session`] returns an error.
+    ///
+    /// [`cleanup_session`]: CommandRunner::cleanup_session
+    pub fn set_cleanup_should_fail(&mut self, value: bool) -> &mut Self {
+        *self.cleanup_should_fail.lock().unwrap() = value;
+        self
+    }
 }
 
 impl CommandRunner for FakeRunner {
-    async fn read_to_string(&self, _path: &str) -> Result<String, CoreError> {
+    async fn fetch_plan(&self, _plan_ref: &str) -> Result<String, CoreError> {
+        if *self.fetch_plan_should_fail.lock().unwrap() {
+            return Err(CoreError::Message(
+                "fetch_plan failed (scripted)".to_string(),
+            ));
+        }
         Ok(self.plan_contents.lock().unwrap().clone())
+    }
+
+    async fn begin_session(&self, plan_ref: &str) -> Result<String, CoreError> {
+        if *self.begin_session_should_fail.lock().unwrap() {
+            return Err(CoreError::Message(
+                "begin_session failed (scripted)".to_string(),
+            ));
+        }
+        self.sessions_begun
+            .lock()
+            .unwrap()
+            .push(plan_ref.to_string());
+        Ok(format!("session:{plan_ref}"))
+    }
+
+    async fn note_progress(&self, session: &str, text: &str) -> Result<(), CoreError> {
+        self.progress_notes
+            .lock()
+            .unwrap()
+            .push((session.to_string(), text.to_string()));
+        Ok(())
+    }
+
+    async fn cleanup_session(&self, session: &str) -> Result<(), CoreError> {
+        self.sessions_cleaned
+            .lock()
+            .unwrap()
+            .push(session.to_string());
+        if *self.cleanup_should_fail.lock().unwrap() {
+            return Err(CoreError::Message(
+                "cleanup_session failed (scripted)".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     async fn git_fetch(&self, _remote: &str, _branch: &str) -> Result<(), CoreError> {
@@ -253,8 +340,9 @@ impl CommandRunner for FakeRunner {
     async fn run_plan_cycle(
         &self,
         _workspace: &str,
-        _plan_path: &str,
+        _plan_ref: &str,
         _profile: &str,
+        _session: &str,
     ) -> Result<i32, CoreError> {
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
         Ok(code)
@@ -291,7 +379,7 @@ mod tests {
         let mut runner = FakeRunner::new();
         runner.push_exit_code(2);
         let code = runner
-            .run_plan_cycle("workspace", "PLAN.md", "default")
+            .run_plan_cycle("workspace", "plan-ref", "default", "session-1")
             .await
             .expect("run_plan_cycle");
         assert_eq!(code, 2);
@@ -301,7 +389,7 @@ mod tests {
     async fn default_exit_code_is_zero_when_queue_empty() {
         let runner = FakeRunner::new();
         let code = runner
-            .run_plan_cycle("workspace", "PLAN.md", "default")
+            .run_plan_cycle("workspace", "plan-ref", "default", "session-1")
             .await
             .expect("run_plan_cycle");
         assert_eq!(code, 0);

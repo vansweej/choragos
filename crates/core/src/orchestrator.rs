@@ -12,8 +12,9 @@ pub struct RunInputs {
     pub workspace: String,
     /// Repository name (typically the workspace directory basename).
     pub repo: String,
-    /// Path to the plan Markdown file, relative to the workspace.
-    pub plan_path: String,
+    /// Reference to the plan stored in cerebrum (a memory id), resolved via
+    /// [`crate::CommandRunner::fetch_plan`].
+    pub plan_ref: String,
     /// Pipeline profile to use; falls back to [`crate::Config::default_profile`]
     /// when `None`.
     pub profile: Option<String>,
@@ -99,11 +100,11 @@ pub async fn run<R: crate::CommandRunner>(
     let base_sha = runner.head_sha().await?;
 
     // ── Read plan and derive branch ───────────────────────────────────────
-    let plan_contents = runner.read_to_string(&inputs.plan_path).await?;
+    let plan_contents = runner.fetch_plan(&inputs.plan_ref).await?;
     let title = crate::plan::parse_title(&plan_contents).ok_or_else(|| {
         crate::CoreError::Message(format!(
-            "no level-1 heading found in plan file '{}'",
-            inputs.plan_path
+            "no level-1 heading found in plan '{}'",
+            inputs.plan_ref
         ))
     })?;
     let slug = inputs
@@ -118,12 +119,21 @@ pub async fn run<R: crate::CommandRunner>(
         runner.create_branch(&branch).await?;
     }
 
+    // ── Open a cerebrum session for this run ──────────────────────────────
+    //
+    // The session outlives individual plan-cycle attempts so that a retry
+    // can recall progress notes left behind by an earlier attempt.
+    let session = runner.begin_session(&inputs.plan_ref).await?;
+
     // ── Retry loop ────────────────────────────────────────────────────────
     let mut code = 0i32;
     let mut attempts = 0u32;
     for attempt in 1..=cfg.max_attempts {
+        let _ = runner
+            .note_progress(&session, &format!("attempt {attempt} started"))
+            .await;
         code = runner
-            .run_plan_cycle(&inputs.workspace, &inputs.plan_path, &profile)
+            .run_plan_cycle(&inputs.workspace, &inputs.plan_ref, &profile, &session)
             .await?;
         attempts = attempt;
         if code == 0 || code == 3 {
@@ -214,6 +224,14 @@ pub async fn run<R: crate::CommandRunner>(
         eprintln!("choragos: telegram notification failed (ignored): {e}");
     }
 
+    // Clean up the cerebrum session best-effort: log and swallow any error.
+    // This is a SCOPED cleanup of this session's own memories only — never a
+    // global session clear, which would affect other concurrent sessions
+    // sharing the same cerebrum store.
+    if let Err(e) = runner.cleanup_session(&session).await {
+        eprintln!("choragos: session cleanup failed (ignored): {e}");
+    }
+
     Ok(record)
 }
 
@@ -237,7 +255,7 @@ mod tests {
         RunInputs {
             workspace: "/workspace".to_string(),
             repo: "my-repo".to_string(),
-            plan_path: "PLAN.md".to_string(),
+            plan_ref: "plan-ref-123".to_string(),
             profile: None,
             slug_override: None,
         }
@@ -347,6 +365,22 @@ mod tests {
         let ops = runner.branch_ops.lock().unwrap();
         assert_eq!(ops.len(), 1);
         assert!(ops[0].starts_with("create:"));
+        drop(ops);
+
+        // exactly one session opened and cleaned up, with a progress note
+        let sessions_begun = runner.sessions_begun.lock().unwrap();
+        assert_eq!(sessions_begun.len(), 1);
+        drop(sessions_begun);
+
+        let sessions_cleaned = runner.sessions_cleaned.lock().unwrap();
+        assert_eq!(sessions_cleaned.len(), 1);
+        drop(sessions_cleaned);
+
+        let notes = runner.progress_notes.lock().unwrap();
+        assert!(
+            notes.iter().any(|(_, text)| text == "attempt 1 started"),
+            "expected an 'attempt 1 started' progress note, got: {notes:?}"
+        );
     }
 
     #[tokio::test]
@@ -549,5 +583,94 @@ mod tests {
         let ops = runner.branch_ops.lock().unwrap();
         assert_eq!(ops.len(), 1);
         assert!(ops[0].starts_with("create:"));
+    }
+
+    // ── Cerebrum session lifecycle tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn session_outlives_retries_across_attempts() {
+        let mut runner = FakeRunner::new();
+        runner.set_exit_codes([2, 0]);
+        runner.set_commits_ahead(1);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        assert_eq!(record.attempts, 2);
+
+        // Exactly one session opened and cleaned up for the whole run,
+        // spanning both attempts.
+        let sessions_begun = runner.sessions_begun.lock().unwrap();
+        assert_eq!(sessions_begun.len(), 1);
+        drop(sessions_begun);
+
+        let sessions_cleaned = runner.sessions_cleaned.lock().unwrap();
+        assert_eq!(sessions_cleaned.len(), 1);
+        drop(sessions_cleaned);
+
+        let notes = runner.progress_notes.lock().unwrap();
+        let session_ids: std::collections::HashSet<_> =
+            notes.iter().map(|(s, _)| s.clone()).collect();
+        assert_eq!(
+            session_ids.len(),
+            1,
+            "both attempts must share one session id"
+        );
+        assert!(notes.iter().any(|(_, text)| text == "attempt 1 started"));
+        assert!(notes.iter().any(|(_, text)| text == "attempt 2 started"));
+    }
+
+    #[tokio::test]
+    async fn fetch_plan_failure_propagates_and_opens_no_session() {
+        let mut runner = FakeRunner::new();
+        runner.set_fetch_plan_should_fail(true);
+
+        let result = run(&runner, &test_cfg(3), test_inputs()).await;
+        assert!(result.is_err(), "fetch_plan failure must propagate");
+
+        let ops = runner.branch_ops.lock().unwrap();
+        assert!(ops.is_empty(), "no branch should be created");
+        drop(ops);
+
+        let sessions_begun = runner.sessions_begun.lock().unwrap();
+        assert!(sessions_begun.is_empty(), "no session should be opened");
+    }
+
+    #[tokio::test]
+    async fn cleanup_session_failure_is_best_effort() {
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(2);
+        runner.set_cleanup_should_fail(true);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run should not hard-fail on a cleanup error");
+
+        assert_eq!(record.failure_class, FailureClass::Green);
+
+        let ledger = runner.appended_records.lock().unwrap();
+        assert_eq!(ledger.len(), 1, "ledger must still be written");
+        drop(ledger);
+
+        let tg = runner.sent_telegrams.lock().unwrap();
+        assert_eq!(tg.len(), 1, "telegram must still be attempted");
+    }
+
+    #[tokio::test]
+    async fn abort_path_opens_no_session() {
+        let mut runner = FakeRunner::new();
+        runner.set_tree_clean(false);
+
+        let _record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        let sessions_begun = runner.sessions_begun.lock().unwrap();
+        assert!(
+            sessions_begun.is_empty(),
+            "clean-start abort must not open a session"
+        );
     }
 }

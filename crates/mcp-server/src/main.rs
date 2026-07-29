@@ -80,7 +80,7 @@ impl ChoragosServer {
         let inputs = choragos_core::orchestrator::RunInputs {
             workspace: workspace_str,
             repo,
-            plan_path,
+            plan_ref: plan_path,
             profile: args.profile,
             slug_override: args.slug,
         };

@@ -14,11 +14,33 @@ use std::future::Future;
 /// `Send + Sync` so they can be used across await points in a multi-threaded
 /// async runtime.
 pub trait CommandRunner: Send + Sync {
-    /// Reads the entire contents of the file at `path`.
-    fn read_to_string(
+    /// Fetches the plan body identified by `plan_ref` from cerebrum.
+    fn fetch_plan(
         &self,
-        path: &str,
+        plan_ref: &str,
     ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
+
+    /// Opens a cerebrum session scoped to `plan_ref` and returns an opaque
+    /// session id. The session outlives individual plan-cycle attempts so
+    /// that retries can recall progress notes from earlier attempts.
+    fn begin_session(
+        &self,
+        plan_ref: &str,
+    ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
+
+    /// Records a best-effort progress note under `session`.
+    fn note_progress(
+        &self,
+        session: &str,
+        text: &str,
+    ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
+
+    /// Cleans up `session`'s scoped memories (best-effort, scoped forget —
+    /// never a global session clear).
+    fn cleanup_session(
+        &self,
+        session: &str,
+    ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
 
     /// Fetches `branch` from `remote`.
     fn git_fetch(
@@ -72,8 +94,9 @@ pub trait CommandRunner: Send + Sync {
     fn run_plan_cycle(
         &self,
         workspace: &str,
-        plan_path: &str,
+        plan_ref: &str,
         profile: &str,
+        session: &str,
     ) -> impl Future<Output = Result<i32, crate::CoreError>> + Send;
 
     /// Creates a pull request and returns its URL.

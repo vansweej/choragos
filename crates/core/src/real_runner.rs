@@ -79,8 +79,28 @@ async fn git_in(dir: &Path, args: &[&str]) -> Result<String, CoreError> {
 
 #[cfg(not(tarpaulin_include))]
 impl CommandRunner for RealRunner {
-    async fn read_to_string(&self, path: &str) -> Result<String, CoreError> {
-        tokio::fs::read_to_string(path).await.map_err(CoreError::Io)
+    async fn fetch_plan(&self, _plan_ref: &str) -> Result<String, CoreError> {
+        Err(CoreError::Message(
+            "cerebrum client not wired until Phase 2".to_string(),
+        ))
+    }
+
+    async fn begin_session(&self, _plan_ref: &str) -> Result<String, CoreError> {
+        Err(CoreError::Message(
+            "cerebrum client not wired until Phase 2".to_string(),
+        ))
+    }
+
+    async fn note_progress(&self, _session: &str, _text: &str) -> Result<(), CoreError> {
+        Err(CoreError::Message(
+            "cerebrum client not wired until Phase 2".to_string(),
+        ))
+    }
+
+    async fn cleanup_session(&self, _session: &str) -> Result<(), CoreError> {
+        Err(CoreError::Message(
+            "cerebrum client not wired until Phase 2".to_string(),
+        ))
     }
 
     async fn git_fetch(&self, remote: &str, branch: &str) -> Result<(), CoreError> {
@@ -142,8 +162,9 @@ impl CommandRunner for RealRunner {
     async fn run_plan_cycle(
         &self,
         workspace: &str,
-        plan_path: &str,
+        plan_ref: &str,
         profile: &str,
+        session: &str,
     ) -> Result<i32, CoreError> {
         let status = tokio::process::Command::new("bun")
             .args([
@@ -153,8 +174,10 @@ impl CommandRunner for RealRunner {
                 "pipeline",
                 "plan-cycle",
                 workspace,
-                "--plan",
-                plan_path,
+                "--plan-ref",
+                plan_ref,
+                "--session",
+                session,
                 "--profile",
                 profile,
                 "--verbose",

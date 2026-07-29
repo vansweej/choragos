@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use crate::{CommandRunner, CoreError, LedgerRecord};
+use crate::{CoreError, LedgerRecord, Memory, Pipeline, Sink, Vcs};
 
 /// A fully scripted, in-memory [`CommandRunner`] implementation.
 ///
@@ -93,6 +93,20 @@ pub struct FakeRunner {
     ///
     /// [`cleanup_session`]: CommandRunner::cleanup_session
     pub sessions_cleaned: Mutex<Vec<String>>,
+    /// Value returned by [`find_pr`] (`None` unless scripted via
+    /// [`set_existing_pr`]).
+    ///
+    /// [`find_pr`]: Vcs::find_pr
+    /// [`set_existing_pr`]: FakeRunner::set_existing_pr
+    existing_pr: Mutex<Option<String>>,
+    /// Number of times [`push_head`] was called.
+    ///
+    /// [`push_head`]: Vcs::push_head
+    pub push_head_calls: Mutex<u32>,
+    /// Number of times [`create_pr`] was called.
+    ///
+    /// [`create_pr`]: Vcs::create_pr
+    pub create_pr_calls: Mutex<u32>,
 }
 
 impl FakeRunner {
@@ -232,9 +246,18 @@ impl FakeRunner {
         *self.cleanup_should_fail.lock().unwrap() = value;
         self
     }
+
+    /// Scripts [`find_pr`] to return `Some(url)` for an already-open PR, or
+    /// `None` (the default) when no PR exists yet.
+    ///
+    /// [`find_pr`]: Vcs::find_pr
+    pub fn set_existing_pr(&mut self, url: Option<impl Into<String>>) -> &mut Self {
+        *self.existing_pr.lock().unwrap() = url.map(Into::into);
+        self
+    }
 }
 
-impl CommandRunner for FakeRunner {
+impl Memory for FakeRunner {
     async fn fetch_plan(&self, _plan_ref: &str) -> Result<String, CoreError> {
         if *self.fetch_plan_should_fail.lock().unwrap() {
             return Err(CoreError::Message(
@@ -277,7 +300,9 @@ impl CommandRunner for FakeRunner {
         }
         Ok(())
     }
+}
 
+impl Vcs for FakeRunner {
     async fn git_fetch(&self, _remote: &str, _branch: &str) -> Result<(), CoreError> {
         Ok(())
     }
@@ -337,6 +362,28 @@ impl CommandRunner for FakeRunner {
         Ok(*self.scripted_commits_ahead.lock().unwrap())
     }
 
+    async fn create_pr(&self, _base: &str, _title: &str, _body: &str) -> Result<String, CoreError> {
+        *self.create_pr_calls.lock().unwrap() += 1;
+        if *self.create_pr_should_fail.lock().unwrap() {
+            return Err(CoreError::Command {
+                context: "gh pr create".to_string(),
+                message: "aborted: you must first push the current branch to a remote".to_string(),
+            });
+        }
+        Ok("https://github.com/x/y/pull/1".to_string())
+    }
+
+    async fn push_head(&self) -> Result<(), CoreError> {
+        *self.push_head_calls.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    async fn find_pr(&self, _branch: &str) -> Result<Option<String>, CoreError> {
+        Ok(self.existing_pr.lock().unwrap().clone())
+    }
+}
+
+impl Pipeline for FakeRunner {
     async fn run_plan_cycle(
         &self,
         _workspace: &str,
@@ -347,17 +394,9 @@ impl CommandRunner for FakeRunner {
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
         Ok(code)
     }
+}
 
-    async fn create_pr(&self, _base: &str, _title: &str, _body: &str) -> Result<String, CoreError> {
-        if *self.create_pr_should_fail.lock().unwrap() {
-            return Err(CoreError::Command {
-                context: "gh pr create".to_string(),
-                message: "aborted: you must first push the current branch to a remote".to_string(),
-            });
-        }
-        Ok("https://github.com/x/y/pull/1".to_string())
-    }
-
+impl Sink for FakeRunner {
     async fn send_telegram(&self, text: &str) -> Result<(), CoreError> {
         self.sent_telegrams.lock().unwrap().push(text.to_string());
         Ok(())
@@ -372,7 +411,7 @@ impl CommandRunner for FakeRunner {
 #[cfg(test)]
 mod tests {
     use super::FakeRunner;
-    use crate::CommandRunner;
+    use crate::Pipeline;
 
     #[tokio::test]
     async fn scripted_exit_code_is_returned() {

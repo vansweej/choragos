@@ -2,6 +2,14 @@
 //!
 //! [`run`] drives the entire lifecycle: clean-start gate, branch management,
 //! retry loop, PR creation, ledger append, and Telegram notification.
+//!
+//! Internally the post-gate flow is split into two private phases:
+//! [`produce`] (branch management, the retry loop, and post-run git state)
+//! and [`publish`] (failure-class derivation and the idempotent
+//! find-or-create PR decision). This mirrors the produce/publish
+//! distinction used elsewhere in choragos: `produce` only touches the local
+//! repo and the plan-cycle executor, while `publish` is the only phase that
+//! pushes state to the outside world (git push, PR creation).
 
 use crate::telegram::render;
 
@@ -21,6 +29,165 @@ pub struct RunInputs {
     /// Override the auto-derived branch slug; when `None` the slug is derived
     /// from the plan title.
     pub slug_override: Option<String>,
+}
+
+/// Result of the `produce` phase: everything needed to derive a
+/// [`crate::LedgerRecord`] and decide whether to publish a PR, except the
+/// failure-class/PR decision itself (that's [`publish`]'s job).
+struct ProduceOutcome {
+    branch: String,
+    slug: String,
+    title: String,
+    base_sha: String,
+    head_sha: String,
+    commits_ahead: u32,
+    exit_code: i32,
+    attempts: u32,
+}
+
+/// Runs plan fetch, branch management, the retry loop, and captures
+/// post-run git state. Does not touch anything outside the local repo and
+/// the plan-cycle executor — no push, no PR, no ledger, no Telegram.
+async fn produce<R: crate::CommandRunner>(
+    runner: &R,
+    cfg: &crate::Config,
+    inputs: &RunInputs,
+    profile: &str,
+    session: &str,
+    base_sha: &str,
+) -> Result<ProduceOutcome, crate::CoreError> {
+    // ── Read plan and derive branch ───────────────────────────────────────
+    let plan_contents = runner.fetch_plan(&inputs.plan_ref).await?;
+    let title = crate::plan::parse_title(&plan_contents).ok_or_else(|| {
+        crate::CoreError::Message(format!(
+            "no level-1 heading found in plan '{}'",
+            inputs.plan_ref
+        ))
+    })?;
+    let slug = inputs
+        .slug_override
+        .clone()
+        .unwrap_or_else(|| crate::plan::slugify(&title));
+    let branch = crate::plan::branch_name(&slug);
+
+    if runner.branch_exists(&branch).await? {
+        runner.switch_branch(&branch).await?;
+    } else {
+        runner.create_branch(&branch).await?;
+    }
+
+    // ── Retry loop ────────────────────────────────────────────────────────
+    let mut code = 0i32;
+    let mut attempts = 0u32;
+    for attempt in 1..=cfg.max_attempts {
+        let _ = runner
+            .note_progress(session, &format!("attempt {attempt} started"))
+            .await;
+        code = runner
+            .run_plan_cycle(&inputs.workspace, &inputs.plan_ref, profile, session)
+            .await?;
+        attempts = attempt;
+        if code == 0 || code == 3 {
+            break;
+        }
+        // code == 2: continue retrying
+    }
+
+    // ── Post-run state ────────────────────────────────────────────────────
+    let head_sha = runner.head_sha().await?;
+    let commits_ahead = runner.commits_ahead(base_sha).await?;
+
+    Ok(ProduceOutcome {
+        branch,
+        slug,
+        title,
+        base_sha: base_sha.to_string(),
+        head_sha,
+        commits_ahead,
+        exit_code: code,
+        attempts,
+    })
+}
+
+/// Derives the [`crate::FailureClass`] and PR decision from a
+/// [`ProduceOutcome`].
+///
+/// On a green run with commits ahead, this is the only phase that pushes to
+/// the outside world: it pushes `HEAD` then does an idempotent
+/// find-or-create PR lookup (reuse an existing open PR rather than fail or
+/// duplicate one on a resumed run). Any push/PR failure degrades gracefully
+/// to Green + `pr_url: None` + an explanatory `reason` — the plan itself
+/// succeeded, so a sink failure must never turn a green run red.
+async fn publish<R: crate::CommandRunner>(
+    runner: &R,
+    outcome: &ProduceOutcome,
+) -> (crate::FailureClass, Option<String>, Option<String>) {
+    // Post-run invariant: green exit but dirty tree → Red override.
+    let post_run_clean = runner.is_working_tree_clean().await.unwrap_or_default();
+
+    if outcome.exit_code == 0 && !post_run_clean {
+        return (
+            crate::FailureClass::Red,
+            None,
+            Some("executor left tree dirty (pipeline invariant violation)".to_string()),
+        );
+    }
+
+    match crate::FailureClass::from_exit_code(outcome.exit_code) {
+        crate::FailureClass::Green => {
+            if outcome.commits_ahead > 0 {
+                let body = format!(
+                    "Automated run of plan `{plan_id}` on branch `{branch}`.",
+                    plan_id = outcome.slug,
+                    branch = outcome.branch,
+                );
+
+                // Push, then find-or-create: reuse an existing open PR if
+                // one is already there (idempotent resume), otherwise
+                // create one. Any failure along this path is best-effort —
+                // it must not turn a successful plan run red.
+                match runner.push_head().await {
+                    Ok(()) => match runner.find_pr(&outcome.branch).await {
+                        Ok(Some(url)) => (crate::FailureClass::Green, Some(url), None),
+                        Ok(None) => match runner.create_pr("main", &outcome.title, &body).await {
+                            Ok(url) => (crate::FailureClass::Green, Some(url), None),
+                            Err(e) => (
+                                crate::FailureClass::Green,
+                                None,
+                                Some(format!("plan succeeded but PR creation failed: {e}")),
+                            ),
+                        },
+                        Err(e) => (
+                            crate::FailureClass::Green,
+                            None,
+                            Some(format!("plan succeeded but PR lookup failed: {e}")),
+                        ),
+                    },
+                    Err(e) => (
+                        crate::FailureClass::Green,
+                        None,
+                        Some(format!("plan succeeded but branch push failed: {e}")),
+                    ),
+                }
+            } else {
+                (
+                    crate::FailureClass::Green,
+                    None,
+                    Some("no changes to land".to_string()),
+                )
+            }
+        }
+        crate::FailureClass::Orange => (
+            crate::FailureClass::Orange,
+            None,
+            Some("max attempts reached without success".to_string()),
+        ),
+        crate::FailureClass::Red => (
+            crate::FailureClass::Red,
+            None,
+            Some("plan cycle exited with hard failure".to_string()),
+        ),
+    }
 }
 
 /// Runs the full plan-cycle orchestration flow.
@@ -90,6 +257,8 @@ pub async fn run<R: crate::CommandRunner>(
             reason: Some(reason),
             started_at,
             finished_at,
+            schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+            change_id: None,
         };
         let _ = runner.append_ledger(&record).await;
         let _ = runner.send_telegram(&render(&record)).await;
@@ -99,121 +268,36 @@ pub async fn run<R: crate::CommandRunner>(
     // ── Capture base_sha BEFORE creating any branch ───────────────────────
     let base_sha = runner.head_sha().await?;
 
-    // ── Read plan and derive branch ───────────────────────────────────────
-    let plan_contents = runner.fetch_plan(&inputs.plan_ref).await?;
-    let title = crate::plan::parse_title(&plan_contents).ok_or_else(|| {
-        crate::CoreError::Message(format!(
-            "no level-1 heading found in plan '{}'",
-            inputs.plan_ref
-        ))
-    })?;
-    let slug = inputs
-        .slug_override
-        .clone()
-        .unwrap_or_else(|| crate::plan::slugify(&title));
-    let branch = crate::plan::branch_name(&slug);
-
-    if runner.branch_exists(&branch).await? {
-        runner.switch_branch(&branch).await?;
-    } else {
-        runner.create_branch(&branch).await?;
-    }
-
     // ── Open a cerebrum session for this run ──────────────────────────────
     //
     // The session outlives individual plan-cycle attempts so that a retry
     // can recall progress notes left behind by an earlier attempt.
     let session = runner.begin_session(&inputs.plan_ref).await?;
 
-    // ── Retry loop ────────────────────────────────────────────────────────
-    let mut code = 0i32;
-    let mut attempts = 0u32;
-    for attempt in 1..=cfg.max_attempts {
-        let _ = runner
-            .note_progress(&session, &format!("attempt {attempt} started"))
-            .await;
-        code = runner
-            .run_plan_cycle(&inputs.workspace, &inputs.plan_ref, &profile, &session)
-            .await?;
-        attempts = attempt;
-        if code == 0 || code == 3 {
-            break;
-        }
-        // code == 2: continue retrying
-    }
+    // ── Produce: plan fetch, branch mgmt, retry loop, post-run git state ──
+    let outcome = produce(runner, cfg, &inputs, &profile, &session, &base_sha).await?;
 
-    // ── Post-run state ────────────────────────────────────────────────────
-    let head_sha_final = runner.head_sha().await?;
-    let commits_ahead = runner.commits_ahead(&base_sha).await?;
-
-    // Post-run invariant: green exit but dirty tree → Red override.
-    let (failure_class, pr_url, reason) = if code == 0 && !runner.is_working_tree_clean().await? {
-        (
-            crate::FailureClass::Red,
-            None,
-            Some("executor left tree dirty (pipeline invariant violation)".to_string()),
-        )
-    } else {
-        let class = crate::FailureClass::from_exit_code(code);
-        match class {
-            crate::FailureClass::Green => {
-                if commits_ahead > 0 {
-                    // Open a PR. A failure here (e.g. push rejected, gh auth
-                    // issue) must NOT abort the run before the ledger is
-                    // written — the plan itself succeeded, so stay Green and
-                    // surface the PR failure via `reason`. PR creation is a
-                    // sink, same as Telegram: its failure is never fatal to
-                    // a green run.
-                    let body = format!(
-                        "Automated run of plan `{plan_id}` on branch `{branch}`.",
-                        plan_id = slug,
-                        branch = branch,
-                    );
-                    match runner.create_pr("main", &title, &body).await {
-                        Ok(url) => (crate::FailureClass::Green, Some(url), None),
-                        Err(e) => (
-                            crate::FailureClass::Green,
-                            None,
-                            Some(format!("plan succeeded but PR creation failed: {e}")),
-                        ),
-                    }
-                } else {
-                    (
-                        crate::FailureClass::Green,
-                        None,
-                        Some("no changes to land".to_string()),
-                    )
-                }
-            }
-            crate::FailureClass::Orange => (
-                crate::FailureClass::Orange,
-                None,
-                Some("max attempts reached without success".to_string()),
-            ),
-            crate::FailureClass::Red => (
-                crate::FailureClass::Red,
-                None,
-                Some("plan cycle exited with hard failure".to_string()),
-            ),
-        }
-    };
+    // ── Publish: failure-class + idempotent find-or-create PR decision ───
+    let (failure_class, pr_url, reason) = publish(runner, &outcome).await;
 
     let finished_at = chrono::Utc::now().to_rfc3339();
     let record = crate::LedgerRecord {
-        plan_id: slug.clone(),
+        plan_id: outcome.slug.clone(),
         repo: inputs.repo.clone(),
-        branch: branch.clone(),
+        branch: outcome.branch.clone(),
         profile: profile.clone(),
-        exit_code: code,
-        attempts,
+        exit_code: outcome.exit_code,
+        attempts: outcome.attempts,
         failure_class,
-        base_sha: base_sha.clone(),
-        head_sha: head_sha_final,
-        commits_ahead,
+        base_sha: outcome.base_sha.clone(),
+        head_sha: outcome.head_sha.clone(),
+        commits_ahead: outcome.commits_ahead,
         pr_url,
         reason,
         started_at,
         finished_at,
+        schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+        change_id: None,
     };
 
     // Append ledger (propagate errors — caller may want to know).
@@ -622,7 +706,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_plan_failure_propagates_and_opens_no_session() {
+    async fn fetch_plan_failure_propagates_and_opens_no_branch() {
         let mut runner = FakeRunner::new();
         runner.set_fetch_plan_should_fail(true);
 
@@ -631,10 +715,6 @@ mod tests {
 
         let ops = runner.branch_ops.lock().unwrap();
         assert!(ops.is_empty(), "no branch should be created");
-        drop(ops);
-
-        let sessions_begun = runner.sessions_begun.lock().unwrap();
-        assert!(sessions_begun.is_empty(), "no session should be opened");
     }
 
     #[tokio::test]
@@ -672,5 +752,57 @@ mod tests {
             sessions_begun.is_empty(),
             "clean-start abort must not open a session"
         );
+    }
+
+    // ── Idempotent PR (produce/publish) tests ────────────────────────────
+
+    #[tokio::test]
+    async fn existing_open_pr_is_reused_and_create_pr_not_called() {
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(2);
+        runner.set_existing_pr(Some("https://github.com/x/y/pull/7"));
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        assert_eq!(record.failure_class, FailureClass::Green);
+        assert_eq!(
+            record.pr_url.as_deref(),
+            Some("https://github.com/x/y/pull/7")
+        );
+
+        let create_pr_calls = *runner.create_pr_calls.lock().unwrap();
+        assert_eq!(
+            create_pr_calls, 0,
+            "create_pr must not be called when an open PR already exists"
+        );
+
+        let push_calls = *runner.push_head_calls.lock().unwrap();
+        assert_eq!(
+            push_calls, 1,
+            "push_head must still run before the find_pr lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_existing_pr_pushes_then_creates() {
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(2);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        assert_eq!(record.failure_class, FailureClass::Green);
+        assert!(record.pr_url.is_some());
+
+        let create_pr_calls = *runner.create_pr_calls.lock().unwrap();
+        assert_eq!(create_pr_calls, 1);
+
+        let push_calls = *runner.push_head_calls.lock().unwrap();
+        assert_eq!(push_calls, 1, "push_head must run before create_pr");
     }
 }

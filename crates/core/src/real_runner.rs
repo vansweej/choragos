@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{CommandRunner, CoreError, LedgerRecord};
+use crate::{CoreError, LedgerRecord, Memory, Pipeline, Sink, Vcs};
 
 /// A [`CommandRunner`] that shells out to real external tools.
 ///
@@ -38,19 +38,6 @@ impl RealRunner {
             telegram_chat_id,
         }
     }
-
-    /// Pushes the current branch to `origin`, creating the upstream ref.
-    ///
-    /// Split out from [`create_pr`] so the push — the part that actually
-    /// touches git state — is exercised by the integration tests, while the
-    /// `gh` invocation stays the only untested outer edge. Idempotent: `-u`
-    /// is safe to repeat on a resumed run.
-    ///
-    /// [`create_pr`]: CommandRunner::create_pr
-    async fn push_head(&self) -> Result<(), CoreError> {
-        git_in(&self.workdir, &["push", "-u", "origin", "HEAD"]).await?;
-        Ok(())
-    }
 }
 
 /// Runs a `git` sub-command in `dir` and returns its trimmed stdout.
@@ -78,7 +65,7 @@ async fn git_in(dir: &Path, args: &[&str]) -> Result<String, CoreError> {
 }
 
 #[cfg(not(tarpaulin_include))]
-impl CommandRunner for RealRunner {
+impl Memory for RealRunner {
     async fn fetch_plan(&self, _plan_ref: &str) -> Result<String, CoreError> {
         Err(CoreError::Message(
             "cerebrum client not wired until Phase 2".to_string(),
@@ -102,7 +89,10 @@ impl CommandRunner for RealRunner {
             "cerebrum client not wired until Phase 2".to_string(),
         ))
     }
+}
 
+#[cfg(not(tarpaulin_include))]
+impl Vcs for RealRunner {
     async fn git_fetch(&self, remote: &str, branch: &str) -> Result<(), CoreError> {
         git_in(&self.workdir, &["fetch", remote, branch]).await?;
         Ok(())
@@ -159,6 +149,70 @@ impl CommandRunner for RealRunner {
         Ok(raw.trim().parse::<u32>().unwrap_or(0))
     }
 
+    async fn create_pr(&self, base: &str, title: &str, body: &str) -> Result<String, CoreError> {
+        // Callers push the branch first (see `Vcs::push_head`); this method
+        // only invokes `gh pr create`.
+        let output = tokio::process::Command::new("gh")
+            .current_dir(&self.workdir)
+            .args([
+                "pr", "create", "--base", base, "--title", title, "--body", body,
+            ])
+            .output()
+            .await
+            .map_err(|e| CoreError::Command {
+                context: "gh pr create".to_string(),
+                message: e.to_string(),
+            })?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            Err(CoreError::Command {
+                context: "gh pr create".to_string(),
+                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            })
+        }
+    }
+
+    /// Pushes the current branch to `origin`, creating the upstream ref.
+    ///
+    /// Split out so the push — the part that actually touches git state — is
+    /// exercised by the integration tests, while the `gh` invocation stays
+    /// the only untested outer edge. Idempotent: `-u` is safe to repeat on a
+    /// resumed run.
+    async fn push_head(&self) -> Result<(), CoreError> {
+        git_in(&self.workdir, &["push", "-u", "origin", "HEAD"]).await?;
+        Ok(())
+    }
+
+    async fn find_pr(&self, branch: &str) -> Result<Option<String>, CoreError> {
+        let output = tokio::process::Command::new("gh")
+            .current_dir(&self.workdir)
+            .args(["pr", "view", branch, "--json", "url", "-q", ".url"])
+            .output()
+            .await
+            .map_err(|e| CoreError::Command {
+                context: "gh pr view".to_string(),
+                message: e.to_string(),
+            })?;
+
+        if output.status.success() {
+            let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if url.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(url))
+            }
+        } else {
+            // `gh pr view` exits non-zero when no PR exists for the branch —
+            // that is not an error condition here.
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(not(tarpaulin_include))]
+impl Pipeline for RealRunner {
     async fn run_plan_cycle(
         &self,
         workspace: &str,
@@ -192,34 +246,10 @@ impl CommandRunner for RealRunner {
 
         Ok(status.code().unwrap_or(3))
     }
+}
 
-    async fn create_pr(&self, base: &str, title: &str, body: &str) -> Result<String, CoreError> {
-        // `gh pr create` requires the head branch to already exist on the
-        // remote, so push first (covered by the integration tests).
-        self.push_head().await?;
-
-        let output = tokio::process::Command::new("gh")
-            .current_dir(&self.workdir)
-            .args([
-                "pr", "create", "--base", base, "--title", title, "--body", body,
-            ])
-            .output()
-            .await
-            .map_err(|e| CoreError::Command {
-                context: "gh pr create".to_string(),
-                message: e.to_string(),
-            })?;
-
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            Err(CoreError::Command {
-                context: "gh pr create".to_string(),
-                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            })
-        }
-    }
-
+#[cfg(not(tarpaulin_include))]
+impl Sink for RealRunner {
     async fn send_telegram(&self, text: &str) -> Result<(), CoreError> {
         let (token, chat_id) = match (&self.telegram_bot_token, &self.telegram_chat_id) {
             (Some(t), Some(c)) => (t.clone(), c.clone()),

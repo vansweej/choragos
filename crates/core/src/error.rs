@@ -27,6 +27,25 @@ pub enum CoreError {
     /// A generic message-only error.
     #[error("{0}")]
     Message(String),
+
+    /// A requested resource does not exist.
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    /// A resource already exists (e.g. an idempotent create was attempted
+    /// twice).
+    #[error("already exists: {0}")]
+    AlreadyExists(String),
+
+    /// A failure that is expected to be transient and may succeed if
+    /// retried (e.g. a flaky network call).
+    #[error("transient error ({context}): {message}")]
+    Transient {
+        /// Short label identifying which command or operation failed.
+        context: String,
+        /// Human-readable description of the failure.
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -51,6 +70,27 @@ mod tests {
     #[test]
     fn message_display_is_non_empty() {
         let err = CoreError::Message("something went wrong".to_string());
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn not_found_display_is_non_empty() {
+        let err = CoreError::NotFound("plan-ref-123".to_string());
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn already_exists_display_is_non_empty() {
+        let err = CoreError::AlreadyExists("pull request".to_string());
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn transient_display_is_non_empty() {
+        let err = CoreError::Transient {
+            context: "cerebrum recall".to_string(),
+            message: "connection reset".to_string(),
+        };
         assert!(!err.to_string().is_empty());
     }
 }

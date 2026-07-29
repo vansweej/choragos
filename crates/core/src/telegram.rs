@@ -57,6 +57,8 @@ mod tests {
             reason: None,
             started_at: "2024-01-01T00:00:00Z".to_string(),
             finished_at: "2024-01-01T00:01:00Z".to_string(),
+            schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+            change_id: None,
         }
     }
 

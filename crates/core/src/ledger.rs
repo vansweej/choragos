@@ -4,6 +4,20 @@ use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+/// Current schema version written by this build of choragos.
+///
+/// Bump this whenever [`LedgerRecord`]'s shape changes in a
+/// backwards-compatible way (new optional field). Old ledger lines lacking
+/// `schema_version` are treated as version 1 (see
+/// [`default_schema_version`]).
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+
+/// Default for [`LedgerRecord::schema_version`] when deserialising a line
+/// written before the field existed (schema version 1).
+fn default_schema_version() -> u32 {
+    1
+}
+
 /// A single entry in the choragos run-ledger.
 ///
 /// Every completed orchestrator run (including clean-start aborts) appends
@@ -38,6 +52,14 @@ pub struct LedgerRecord {
     pub started_at: String,
     /// RFC 3339 timestamp recorded at the end of the run.
     pub finished_at: String,
+    /// Ledger record schema version. Lines written before this field
+    /// existed are treated as version 1.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    /// Opaque identifier correlating this record with a multi-repo change
+    /// (Phase 5). `None` for single-repo runs.
+    #[serde(default)]
+    pub change_id: Option<String>,
 }
 
 impl LedgerRecord {
@@ -81,7 +103,7 @@ pub fn append_line(path: &Path, line: &str) -> Result<(), crate::CoreError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_line, default_ledger_path, LedgerRecord};
+    use super::{append_line, default_ledger_path, LedgerRecord, CURRENT_SCHEMA_VERSION};
     use crate::FailureClass;
 
     fn sample_record() -> LedgerRecord {
@@ -100,6 +122,8 @@ mod tests {
             reason: None,
             started_at: "2024-01-01T00:00:00Z".to_string(),
             finished_at: "2024-01-01T00:01:00Z".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+            change_id: None,
         }
     }
 
@@ -138,6 +162,36 @@ mod tests {
         assert_eq!(decoded.reason, record.reason);
         assert_eq!(decoded.started_at, record.started_at);
         assert_eq!(decoded.finished_at, record.finished_at);
+        assert_eq!(decoded.schema_version, record.schema_version);
+        assert_eq!(decoded.change_id, record.change_id);
+    }
+
+    #[test]
+    fn v1_line_missing_new_fields_defaults_schema_version_and_change_id() {
+        // A line written before schema_version/change_id existed.
+        let v1_line = serde_json::json!({
+            "plan_id": "choragos-v1",
+            "repo": "choragos",
+            "branch": "feat/choragos-v1",
+            "profile": "default",
+            "exit_code": 0,
+            "attempts": 1,
+            "failure_class": "green",
+            "base_sha": "abc123",
+            "head_sha": "def456",
+            "commits_ahead": 3,
+            "pr_url": null,
+            "reason": null,
+            "started_at": "2024-01-01T00:00:00Z",
+            "finished_at": "2024-01-01T00:01:00Z",
+        })
+        .to_string();
+
+        let decoded: LedgerRecord =
+            serde_json::from_str(&v1_line).expect("deserialise v1 LedgerRecord");
+
+        assert_eq!(decoded.schema_version, 1);
+        assert_eq!(decoded.change_id, None);
     }
 
     #[test]

@@ -90,6 +90,8 @@ pub async fn run<R: crate::CommandRunner>(
             reason: Some(reason),
             started_at,
             finished_at,
+            schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+            change_id: None,
         };
         let _ = runner.append_ledger(&record).await;
         let _ = runner.send_telegram(&render(&record)).await;
@@ -214,6 +216,8 @@ pub async fn run<R: crate::CommandRunner>(
         reason,
         started_at,
         finished_at,
+        schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+        change_id: None,
     };
 
     // Append ledger (propagate errors — caller may want to know).

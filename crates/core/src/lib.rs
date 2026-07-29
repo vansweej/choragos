@@ -20,7 +20,7 @@ pub use ledger::LedgerRecord;
 pub mod plan;
 
 pub mod runner;
-pub use runner::CommandRunner;
+pub use runner::{CommandRunner, Memory, Pipeline, Sink, Vcs};
 
 pub mod telegram;
 
@@ -35,6 +35,6 @@ pub use real_runner::RealRunner;
 mod tests {
     #[test]
     fn smoke() {
-        assert!(true);
+        assert_eq!(1 + 1, 2);
     }
 }

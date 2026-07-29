@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use crate::{CommandRunner, CoreError, LedgerRecord};
+use crate::{CoreError, LedgerRecord, Memory, Pipeline, Sink, Vcs};
 
 /// A fully scripted, in-memory [`CommandRunner`] implementation.
 ///
@@ -234,7 +234,7 @@ impl FakeRunner {
     }
 }
 
-impl CommandRunner for FakeRunner {
+impl Memory for FakeRunner {
     async fn fetch_plan(&self, _plan_ref: &str) -> Result<String, CoreError> {
         if *self.fetch_plan_should_fail.lock().unwrap() {
             return Err(CoreError::Message(
@@ -277,7 +277,9 @@ impl CommandRunner for FakeRunner {
         }
         Ok(())
     }
+}
 
+impl Vcs for FakeRunner {
     async fn git_fetch(&self, _remote: &str, _branch: &str) -> Result<(), CoreError> {
         Ok(())
     }
@@ -337,6 +339,18 @@ impl CommandRunner for FakeRunner {
         Ok(*self.scripted_commits_ahead.lock().unwrap())
     }
 
+    async fn create_pr(&self, _base: &str, _title: &str, _body: &str) -> Result<String, CoreError> {
+        if *self.create_pr_should_fail.lock().unwrap() {
+            return Err(CoreError::Command {
+                context: "gh pr create".to_string(),
+                message: "aborted: you must first push the current branch to a remote".to_string(),
+            });
+        }
+        Ok("https://github.com/x/y/pull/1".to_string())
+    }
+}
+
+impl Pipeline for FakeRunner {
     async fn run_plan_cycle(
         &self,
         _workspace: &str,
@@ -347,17 +361,9 @@ impl CommandRunner for FakeRunner {
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
         Ok(code)
     }
+}
 
-    async fn create_pr(&self, _base: &str, _title: &str, _body: &str) -> Result<String, CoreError> {
-        if *self.create_pr_should_fail.lock().unwrap() {
-            return Err(CoreError::Command {
-                context: "gh pr create".to_string(),
-                message: "aborted: you must first push the current branch to a remote".to_string(),
-            });
-        }
-        Ok("https://github.com/x/y/pull/1".to_string())
-    }
-
+impl Sink for FakeRunner {
     async fn send_telegram(&self, text: &str) -> Result<(), CoreError> {
         self.sent_telegrams.lock().unwrap().push(text.to_string());
         Ok(())
@@ -372,7 +378,7 @@ impl CommandRunner for FakeRunner {
 #[cfg(test)]
 mod tests {
     use super::FakeRunner;
-    use crate::CommandRunner;
+    use crate::Pipeline;
 
     #[tokio::test]
     async fn scripted_exit_code_is_returned() {

@@ -1,47 +1,19 @@
-//! [`CommandRunner`] trait — the I/O seam between the orchestrator and the
-//! outside world.
+//! I/O seams between the orchestrator and the outside world.
 //!
-//! All side-effectful operations (git, gh, bun, Telegram, ledger) are
-//! accessed exclusively through this trait so that the orchestrator can be
-//! driven by a [`fake::FakeRunner`] in tests.
+//! All side-effectful operations (git, gh, bun, cerebrum, Telegram, ledger)
+//! are accessed exclusively through these traits so that the orchestrator can
+//! be driven by a [`fake::FakeRunner`] in tests.
+//!
+//! The seam is split into four focused traits — [`Vcs`], [`Pipeline`],
+//! [`Memory`], and [`Sink`] — unified by the [`CommandRunner`] marker
+//! supertrait so that `orchestrator::run` can keep a single `R: CommandRunner`
+//! bound while each concern stays independently documented and (in future
+//! phases) independently mockable.
 
 use std::future::Future;
 
-/// Abstracts every external operation the orchestrator needs.
-///
-/// Each method is an `async fn` returning `Result<_, `[`crate::CoreError`]`>`
-/// unless the return type is stated otherwise.  Implementations must be
-/// `Send + Sync` so they can be used across await points in a multi-threaded
-/// async runtime.
-pub trait CommandRunner: Send + Sync {
-    /// Fetches the plan body identified by `plan_ref` from cerebrum.
-    fn fetch_plan(
-        &self,
-        plan_ref: &str,
-    ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
-
-    /// Opens a cerebrum session scoped to `plan_ref` and returns an opaque
-    /// session id. The session outlives individual plan-cycle attempts so
-    /// that retries can recall progress notes from earlier attempts.
-    fn begin_session(
-        &self,
-        plan_ref: &str,
-    ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
-
-    /// Records a best-effort progress note under `session`.
-    fn note_progress(
-        &self,
-        session: &str,
-        text: &str,
-    ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
-
-    /// Cleans up `session`'s scoped memories (best-effort, scoped forget —
-    /// never a global session clear).
-    fn cleanup_session(
-        &self,
-        session: &str,
-    ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
-
+/// Git and GitHub operations: branch management, PR creation.
+pub trait Vcs: Send + Sync {
     /// Fetches `branch` from `remote`.
     fn git_fetch(
         &self,
@@ -90,6 +62,17 @@ pub trait CommandRunner: Send + Sync {
         base_sha: &str,
     ) -> impl Future<Output = Result<u32, crate::CoreError>> + Send;
 
+    /// Creates a pull request and returns its URL.
+    fn create_pr(
+        &self,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
+}
+
+/// Execution of the ai-coding plan-cycle pipeline.
+pub trait Pipeline: Send + Sync {
     /// Runs the ai-coding plan-cycle executor and returns its exit code.
     fn run_plan_cycle(
         &self,
@@ -98,15 +81,41 @@ pub trait CommandRunner: Send + Sync {
         profile: &str,
         session: &str,
     ) -> impl Future<Output = Result<i32, crate::CoreError>> + Send;
+}
 
-    /// Creates a pull request and returns its URL.
-    fn create_pr(
+/// Cerebrum-backed plan storage and session-scoped progress notes.
+pub trait Memory: Send + Sync {
+    /// Fetches the plan body identified by `plan_ref` from cerebrum.
+    fn fetch_plan(
         &self,
-        base: &str,
-        title: &str,
-        body: &str,
+        plan_ref: &str,
     ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
 
+    /// Opens a cerebrum session scoped to `plan_ref` and returns an opaque
+    /// session id. The session outlives individual plan-cycle attempts so
+    /// that retries can recall progress notes from earlier attempts.
+    fn begin_session(
+        &self,
+        plan_ref: &str,
+    ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
+
+    /// Records a best-effort progress note under `session`.
+    fn note_progress(
+        &self,
+        session: &str,
+        text: &str,
+    ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
+
+    /// Cleans up `session`'s scoped memories (best-effort, scoped forget —
+    /// never a global session clear).
+    fn cleanup_session(
+        &self,
+        session: &str,
+    ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
+}
+
+/// Output sinks: Telegram notifications and the run-ledger.
+pub trait Sink: Send + Sync {
     /// Sends a Telegram notification with `text`.
     fn send_telegram(
         &self,
@@ -119,6 +128,15 @@ pub trait CommandRunner: Send + Sync {
         record: &crate::LedgerRecord,
     ) -> impl Future<Output = Result<(), crate::CoreError>> + Send;
 }
+
+/// Marker supertrait unifying [`Vcs`], [`Pipeline`], [`Memory`], and [`Sink`]
+/// so that `orchestrator::run` can keep a single generic bound.
+///
+/// Blanket-implemented for any type that implements all four seams — no
+/// manual `impl CommandRunner for T {}` is needed.
+pub trait CommandRunner: Vcs + Pipeline + Memory + Sink {}
+
+impl<T: Vcs + Pipeline + Memory + Sink> CommandRunner for T {}
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;

@@ -23,6 +23,7 @@ directories = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
+rmcp = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

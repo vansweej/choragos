@@ -75,6 +75,7 @@ impl ChoragosServer {
             self.config.ai_coding_monorepo.clone(),
             self.config.telegram_bot_token.clone(),
             self.config.telegram_chat_id.clone(),
+            self.config.cerebrum_bin.clone(),
         );
 
         let inputs = choragos_core::orchestrator::RunInputs {

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{CoreError, LedgerRecord, Memory, Pipeline, Sink, Vcs};
+use crate::{CerebrumClient, CoreError, LedgerRecord, Memory, Pipeline, Sink, Vcs};
 
 /// A [`CommandRunner`] that shells out to real external tools.
 ///
@@ -10,6 +10,8 @@ use crate::{CoreError, LedgerRecord, Memory, Pipeline, Sink, Vcs};
 /// - Pull-request creation uses the `gh` CLI (also run in `workdir`).
 /// - Plan-cycle execution uses `bun run … pipeline plan-cycle`.
 /// - Telegram notifications use `reqwest` to POST to the Bot API.
+/// - Plan fetch and session progress use the cerebrum MCP server via
+///   [`CerebrumClient`].
 ///
 /// [`workdir`]: RealRunner::workdir
 pub struct RealRunner {
@@ -21,6 +23,8 @@ pub struct RealRunner {
     pub telegram_bot_token: Option<String>,
     /// Telegram chat ID, if configured.
     pub telegram_chat_id: Option<String>,
+    /// Cerebrum MCP client (lazily connects on first use).
+    pub cerebrum: CerebrumClient,
 }
 
 impl RealRunner {
@@ -30,12 +34,14 @@ impl RealRunner {
         ai_coding_monorepo: impl Into<String>,
         telegram_bot_token: Option<String>,
         telegram_chat_id: Option<String>,
+        cerebrum_bin: impl Into<String>,
     ) -> Self {
         Self {
             workdir: workdir.into(),
             ai_coding_monorepo: ai_coding_monorepo.into(),
             telegram_bot_token,
             telegram_chat_id,
+            cerebrum: CerebrumClient::new(cerebrum_bin),
         }
     }
 }
@@ -66,28 +72,25 @@ async fn git_in(dir: &Path, args: &[&str]) -> Result<String, CoreError> {
 
 #[cfg(not(tarpaulin_include))]
 impl Memory for RealRunner {
-    async fn fetch_plan(&self, _plan_ref: &str) -> Result<String, CoreError> {
-        Err(CoreError::Message(
-            "cerebrum client not wired until Phase 2".to_string(),
-        ))
+    async fn fetch_plan(&self, plan_ref: &str) -> Result<String, CoreError> {
+        self.cerebrum.fetch_plan(plan_ref).await
     }
 
-    async fn begin_session(&self, _plan_ref: &str) -> Result<String, CoreError> {
-        Err(CoreError::Message(
-            "cerebrum client not wired until Phase 2".to_string(),
-        ))
+    async fn begin_session(&self, plan_ref: &str) -> Result<String, CoreError> {
+        // Local mint, infallible: cerebrum has no open-session tool, and a
+        // session is just a scope-id string. This must never fail — an
+        // Ollama/cerebrum hiccup at session-open time must not abort a run
+        // before the plan-cycle executor even starts.
+        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        Ok(format!("session:{plan_ref}:{nanos}"))
     }
 
-    async fn note_progress(&self, _session: &str, _text: &str) -> Result<(), CoreError> {
-        Err(CoreError::Message(
-            "cerebrum client not wired until Phase 2".to_string(),
-        ))
+    async fn note_progress(&self, session: &str, text: &str) -> Result<(), CoreError> {
+        self.cerebrum.note_progress(session, text).await
     }
 
-    async fn cleanup_session(&self, _session: &str) -> Result<(), CoreError> {
-        Err(CoreError::Message(
-            "cerebrum client not wired until Phase 2".to_string(),
-        ))
+    async fn cleanup_session(&self, session: &str) -> Result<(), CoreError> {
+        self.cerebrum.cleanup_session(session).await
     }
 }
 
@@ -330,7 +333,13 @@ mod git_integration_tests {
     }
 
     fn runner_for(dir: &Path) -> RealRunner {
-        RealRunner::new(dir.to_path_buf(), "/nonexistent-monorepo", None, None)
+        RealRunner::new(
+            dir.to_path_buf(),
+            "/nonexistent-monorepo",
+            None,
+            None,
+            "/nonexistent-cerebrum-bin",
+        )
     }
 
     #[tokio::test]

@@ -93,9 +93,23 @@ Exit codes:
 | `CHORAGOS_MAX_ATTEMPTS` | no | `3` | Maximum plan-cycle attempts before giving up with Orange. |
 | `TELEGRAM_BOT_TOKEN` | no | — | Telegram bot token for run notifications. |
 | `TELEGRAM_CHAT_ID` | no | — | Telegram chat ID for run notifications. |
+| `CEREBRUM_BIN` | **yes** | — | Absolute path to the cerebrum MCP server binary. Should be the same wrapped binary the opencode session's cerebrum MCP registration uses, so choragos and the plan's author share one memory store. |
 
 Both Telegram variables must be set for notifications to be sent; if either is
 absent the notification step is silently skipped.
+
+### Plans from cerebrum
+
+`RunInputs.plan_ref` is a memory id (or, once cerebrum's `plan:<id>` scope
+convention is adopted by the planner, the plan's `<id>`). choragos fetches
+the plan body from cerebrum via `recall_by_scope(scope: "plan:<id>",
+exact_scope: true)` — the `exact_scope` flag ensures the fetch isn't crowded
+out of the result window by unrelated high-salience global memories. Each
+run mints a local `session:<plan_ref>:<timestamp>` scope (no cerebrum call
+needed to open it) and records low-salience (`0.4`) progress notes under it
+per plan-cycle attempt; on finalize, all memories under that session scope
+are cleaned up best-effort (never a global `end_session`, which would
+affect other concurrent sessions sharing the same store).
 
 ---
 
@@ -192,6 +206,7 @@ git pull --ff-only
 # 2. Set required environment variables (add to your shell profile).
 export AI_CODING_MONOREPO="$HOME/Projects/ai-coding"
 export CHORAGOS_DEFAULT_PROFILE="default"
+export CEREBRUM_BIN="$(which cerebrum)"
 
 # 3. Place your plan at PLAN.md (or pass --plan <path>).
 #    The first level-1 heading determines the branch slug:

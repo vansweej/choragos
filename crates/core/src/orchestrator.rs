@@ -332,6 +332,7 @@ mod tests {
             max_attempts,
             telegram_bot_token: None,
             telegram_chat_id: None,
+            cerebrum_bin: "/nix/store/xyz-cerebrum/bin/cerebrum".to_string(),
         }
     }
 

@@ -121,6 +121,38 @@ impl CerebrumClient {
             .ok_or_else(|| crate::CoreError::NotFound(format!("plan_ref '{plan_ref}'")))
     }
 
+    /// Fetches the JSON body of a Phase 5 change manifest stored under the
+    /// exact `plan:<change_ref>` scope.
+    ///
+    /// Deliberately reuses the `plan:` scope kind rather than a separate
+    /// `change:` kind — cerebrum's scope grammar only has `global`,
+    /// `user:`, `agent:`, `session:`, and `plan:` (see
+    /// [`CerebrumClient::fetch_plan`]'s doc comment for why `exact_scope`
+    /// matters here too), and a change manifest is conceptually "the plan
+    /// for a change": no new grammar is needed, just a different content
+    /// shape (JSON instead of markdown) under the same scope kind. The
+    /// caller ([`crate::change::run_multi`]) is responsible for parsing the
+    /// returned string as a [`crate::change::ChangeManifest`].
+    pub async fn fetch_change(&self, change_ref: &str) -> Result<String, crate::CoreError> {
+        let scope = format!("plan:{change_ref}");
+        let value = self
+            .call(
+                "recall_by_scope",
+                json!({ "query": change_ref, "scope": scope, "limit": 5, "exact_scope": true }),
+            )
+            .await?;
+
+        value
+            .get("results")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|r| r.get("scope").and_then(Value::as_str) == Some(scope.as_str()))
+            .and_then(|r| r.get("content").and_then(Value::as_str))
+            .map(str::to_string)
+            .ok_or_else(|| crate::CoreError::NotFound(format!("change_ref '{change_ref}'")))
+    }
+
     /// Records a best-effort, low-salience progress note under `session`.
     ///
     /// Failures are mapped to `Transient` and should be swallowed by the

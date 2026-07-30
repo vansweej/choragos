@@ -71,6 +71,7 @@ fn error_record(
     job: &RepoJob,
     profile: &str,
     started_at: &str,
+    change_id: Option<&str>,
     error: &crate::CoreError,
 ) -> crate::LedgerRecord {
     let finished_at = chrono::Utc::now().to_rfc3339();
@@ -93,7 +94,7 @@ fn error_record(
         started_at: started_at.to_string(),
         finished_at,
         schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
-        change_id: None,
+        change_id: change_id.map(str::to_string),
     }
 }
 
@@ -143,13 +144,13 @@ where
                 .trunk
                 .clone()
                 .unwrap_or_else(crate::orchestrator::RunInputs::default_trunk),
+            change_id: change_id.map(str::to_string),
         };
 
-        let mut record = match crate::orchestrator::run(&runner, cfg, inputs).await {
+        let record = match crate::orchestrator::run(&runner, cfg, inputs).await {
             Ok(record) => record,
-            Err(e) => error_record(job, &profile, &started_at, &e),
+            Err(e) => error_record(job, &profile, &started_at, change_id, &e),
         };
-        record.change_id = change_id.map(str::to_string);
 
         let stop = record.failure_class != crate::FailureClass::Green && job.required;
         records.push(record);

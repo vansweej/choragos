@@ -133,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         profile: args.profile,
         slug_override: args.slug,
         trunk: choragos_core::orchestrator::RunInputs::default_trunk(),
+        change_id: None,
     };
 
     let record = choragos_core::orchestrator::run(&runner, &config, inputs).await?;

@@ -54,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
         config.ai_coding_monorepo.clone(),
         config.telegram_bot_token.clone(),
         config.telegram_chat_id.clone(),
+        config.cerebrum_bin.clone(),
     );
 
     let inputs = choragos_core::orchestrator::RunInputs {

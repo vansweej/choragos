@@ -15,6 +15,9 @@ pub struct Config {
     pub telegram_bot_token: Option<String>,
     /// Telegram chat ID for run notifications, if configured.
     pub telegram_chat_id: Option<String>,
+    /// Absolute path to the cerebrum MCP server binary (the same wrapped
+    /// binary the opencode session uses, so both share one memory store).
+    pub cerebrum_bin: String,
 }
 
 /// Resolves [`Config`] from an arbitrary key→value getter.
@@ -44,12 +47,16 @@ pub fn from_getter<F: Fn(&str) -> Option<String>>(get: F) -> Result<Config, crat
     let telegram_bot_token = get("TELEGRAM_BOT_TOKEN");
     let telegram_chat_id = get("TELEGRAM_CHAT_ID");
 
+    let cerebrum_bin = get("CEREBRUM_BIN")
+        .ok_or_else(|| crate::CoreError::MissingEnv("CEREBRUM_BIN".to_string()))?;
+
     Ok(Config {
         ai_coding_monorepo,
         default_profile,
         max_attempts,
         telegram_bot_token,
         telegram_chat_id,
+        cerebrum_bin,
     })
 }
 
@@ -80,6 +87,7 @@ mod tests {
         m.insert("CHORAGOS_MAX_ATTEMPTS", "5");
         m.insert("TELEGRAM_BOT_TOKEN", "tok123");
         m.insert("TELEGRAM_CHAT_ID", "chat456");
+        m.insert("CEREBRUM_BIN", "/nix/store/xyz-cerebrum/bin/cerebrum");
         m
     }
 
@@ -94,6 +102,7 @@ mod tests {
                 max_attempts: 5,
                 telegram_bot_token: Some("tok123".to_string()),
                 telegram_chat_id: Some("chat456".to_string()),
+                cerebrum_bin: "/nix/store/xyz-cerebrum/bin/cerebrum".to_string(),
             }
         );
     }
@@ -121,6 +130,17 @@ mod tests {
     }
 
     #[test]
+    fn missing_cerebrum_bin_returns_error() {
+        let mut m = full_map();
+        m.remove("CEREBRUM_BIN");
+        let err = from_getter(make_getter(m)).unwrap_err();
+        match err {
+            CoreError::MissingEnv(var) => assert_eq!(var, "CEREBRUM_BIN"),
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
     fn non_numeric_max_attempts_returns_error() {
         let mut m = full_map();
         m.insert("CHORAGOS_MAX_ATTEMPTS", "not-a-number");
@@ -136,6 +156,7 @@ mod tests {
         let mut m = HashMap::new();
         m.insert("AI_CODING_MONOREPO", "/repo");
         m.insert("CHORAGOS_DEFAULT_PROFILE", "prod");
+        m.insert("CEREBRUM_BIN", "/nix/store/xyz-cerebrum/bin/cerebrum");
         let cfg = from_getter(make_getter(m)).expect("should succeed");
         assert_eq!(cfg.max_attempts, 3);
         assert!(cfg.telegram_bot_token.is_none());

@@ -110,9 +110,10 @@ impl Vcs for RealRunner {
         Ok(output.is_empty())
     }
 
-    async fn local_matches_remote(&self, _branch: &str) -> Result<bool, CoreError> {
-        let local = git_in(&self.workdir, &["rev-parse", "main"]).await?;
-        let remote = git_in(&self.workdir, &["rev-parse", "origin/main"]).await?;
+    async fn local_matches_remote(&self, branch: &str) -> Result<bool, CoreError> {
+        let local = git_in(&self.workdir, &["rev-parse", branch]).await?;
+        let remote_ref = format!("origin/{branch}");
+        let remote = git_in(&self.workdir, &["rev-parse", &remote_ref]).await?;
         Ok(local == remote)
     }
 

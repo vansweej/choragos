@@ -7,7 +7,14 @@
 /// | `Green`  | Run succeeded (exit code 0).                 |
 /// | `Orange` | Recoverable failure; retry is warranted (exit code 2). |
 /// | `Red`    | Hard failure; no retry (exit code 3 or unknown). |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+///
+/// Ordered by severity ascending (`Green < Orange < Red`) via the derived
+/// [`Ord`] impl (relies on declaration order) — used to roll up a batch of
+/// per-repo outcomes (Phase 5's `run_multi`) into a single worst-class
+/// verdict via [`Iterator::max`].
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum FailureClass {
     /// The plan cycle completed successfully.
@@ -82,5 +89,21 @@ mod tests {
     #[test]
     fn display_red() {
         assert_eq!(FailureClass::Red.to_string(), "red");
+    }
+
+    #[test]
+    fn ordering_reflects_severity() {
+        assert!(FailureClass::Green < FailureClass::Orange);
+        assert!(FailureClass::Orange < FailureClass::Red);
+        assert!(FailureClass::Green < FailureClass::Red);
+    }
+
+    #[test]
+    fn max_of_a_batch_is_the_worst_class() {
+        let classes = [FailureClass::Green, FailureClass::Red, FailureClass::Orange];
+        assert_eq!(classes.into_iter().max(), Some(FailureClass::Red));
+
+        let all_green = [FailureClass::Green, FailureClass::Green];
+        assert_eq!(all_green.into_iter().max(), Some(FailureClass::Green));
     }
 }

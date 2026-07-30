@@ -29,6 +29,18 @@ pub struct RunInputs {
     /// Override the auto-derived branch slug; when `None` the slug is derived
     /// from the plan title.
     pub slug_override: Option<String>,
+    /// Trunk branch name (the clean-start gate branch and the PR base).
+    /// Defaults to `"main"` via [`RunInputs::default_trunk`] — set this
+    /// explicitly for repos whose default branch is `master`/`develop`/etc.
+    /// (Phase 5's per-repo manifest entries will carry this per repo.)
+    pub trunk: String,
+}
+
+impl RunInputs {
+    /// The trunk branch name assumed when a caller doesn't set one.
+    pub fn default_trunk() -> String {
+        "main".to_string()
+    }
 }
 
 /// Result of the `produce` phase: everything needed to derive a
@@ -121,6 +133,7 @@ async fn produce<R: crate::CommandRunner>(
 async fn publish<R: crate::CommandRunner>(
     runner: &R,
     outcome: &ProduceOutcome,
+    trunk: &str,
 ) -> (crate::FailureClass, Option<String>, Option<String>) {
     // Post-run invariant: green exit but dirty tree → Red override.
     let post_run_clean = runner.is_working_tree_clean().await.unwrap_or_default();
@@ -149,7 +162,7 @@ async fn publish<R: crate::CommandRunner>(
                 match runner.push_head().await {
                     Ok(()) => match runner.find_pr(&outcome.branch).await {
                         Ok(Some(url)) => (crate::FailureClass::Green, Some(url), None),
-                        Ok(None) => match runner.create_pr("main", &outcome.title, &body).await {
+                        Ok(None) => match runner.create_pr(trunk, &outcome.title, &body).await {
                             Ok(url) => (crate::FailureClass::Green, Some(url), None),
                             Err(e) => (
                                 crate::FailureClass::Green,
@@ -194,9 +207,10 @@ async fn publish<R: crate::CommandRunner>(
 ///
 /// # Flow
 ///
-/// 1. **Clean-start gate** — fetches `origin/main`, then verifies that the
-///    current branch is `main`, the working tree is clean, and the local
-///    `main` matches the remote.  Any failure returns a Red [`crate::LedgerRecord`]
+/// 1. **Clean-start gate** — fetches `origin/<trunk>`, then verifies that the
+///    current branch is `<trunk>`, the working tree is clean, and the local
+///    `<trunk>` matches the remote. `<trunk>` defaults to `"main"`
+///    ([`RunInputs::trunk`]). Any failure returns a Red [`crate::LedgerRecord`]
 ///    immediately without creating a branch.
 /// 2. **Branch management** — captures `base_sha`, reads the plan, derives
 ///    the slug and branch name, then creates or switches to the feature branch.
@@ -225,16 +239,17 @@ pub async fn run<R: crate::CommandRunner>(
         .unwrap_or_else(|| cfg.default_profile.clone());
 
     // ── Clean-start gate ─────────────────────────────────────────────────
-    runner.git_fetch("origin", "main").await?;
+    let trunk = inputs.trunk.as_str();
+    runner.git_fetch("origin", trunk).await?;
 
     let abort_reason: Option<String> = {
         let branch = runner.current_branch().await?;
-        if branch != "main" {
-            Some(format!("current branch is '{branch}', not 'main'"))
+        if branch != trunk {
+            Some(format!("current branch is '{branch}', not '{trunk}'"))
         } else if !runner.is_working_tree_clean().await? {
             Some("working tree is not clean".to_string())
-        } else if !runner.local_matches_remote("main").await? {
-            Some("local main is behind remote".to_string())
+        } else if !runner.local_matches_remote(trunk).await? {
+            Some(format!("local {trunk} is behind remote"))
         } else {
             None
         }
@@ -245,7 +260,7 @@ pub async fn run<R: crate::CommandRunner>(
         let record = crate::LedgerRecord {
             plan_id: String::new(),
             repo: inputs.repo.clone(),
-            branch: "main".to_string(),
+            branch: trunk.to_string(),
             profile: profile.clone(),
             exit_code: -1,
             attempts: 0,
@@ -278,7 +293,7 @@ pub async fn run<R: crate::CommandRunner>(
     let outcome = produce(runner, cfg, &inputs, &profile, &session, &base_sha).await?;
 
     // ── Publish: failure-class + idempotent find-or-create PR decision ───
-    let (failure_class, pr_url, reason) = publish(runner, &outcome).await;
+    let (failure_class, pr_url, reason) = publish(runner, &outcome, trunk).await;
 
     let finished_at = chrono::Utc::now().to_rfc3339();
     let record = crate::LedgerRecord {
@@ -343,6 +358,7 @@ mod tests {
             plan_ref: "plan-ref-123".to_string(),
             profile: None,
             slug_override: None,
+            trunk: RunInputs::default_trunk(),
         }
     }
 
@@ -396,6 +412,31 @@ mod tests {
 
         let tg = runner.sent_telegrams.lock().unwrap();
         assert_eq!(tg.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn custom_trunk_mismatch_yields_red_and_no_branch() {
+        // FakeRunner::new() defaults to reporting current_branch() == "main".
+        // With a non-default trunk ("develop"), the gate must compare
+        // against THAT trunk, not a hardcoded "main" — so this must abort
+        // even though "main" would have passed the old hardcoded check.
+        let runner = FakeRunner::new();
+        let mut inputs = test_inputs();
+        inputs.trunk = "develop".to_string();
+
+        let record = run(&runner, &test_cfg(3), inputs).await.expect("run");
+
+        assert_eq!(record.failure_class, FailureClass::Red);
+        assert_eq!(record.branch, "develop");
+        assert!(
+            record
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("not 'develop'"),
+            "reason should reference the configured trunk, got: {:?}",
+            record.reason
+        );
     }
 
     #[tokio::test]

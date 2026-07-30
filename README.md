@@ -160,7 +160,7 @@ line to the ledger file.
 |-------|------|-------------|
 | `plan_id` | `string` | Branch slug used as the plan identifier. |
 | `repo` | `string` | Repository name (workspace directory basename). |
-| `branch` | `string` | Feature branch name (`feat/<slug>`) or `"main"` on abort. |
+| `branch` | `string` | Feature branch name (`feat/<slug>`) or the configured trunk (default `"main"`) on abort. |
 | `profile` | `string` | Pipeline profile used for the run. |
 | `exit_code` | `integer` | Raw exit code from the executor (`-1` on abort). |
 | `attempts` | `integer` | Number of plan-cycle attempts made. |

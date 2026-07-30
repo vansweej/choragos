@@ -47,11 +47,12 @@ All arguments are optional:
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `plan_path` | `string` | `"PLAN.md"` | Path to the plan Markdown file, relative to the workspace root. |
-| `profile` | `string` | `CHORAGOS_DEFAULT_PROFILE` | Pipeline profile to pass to the executor. |
-| `slug` | `string` | derived from plan title | Override the auto-derived branch slug. |
+| `plan_path` | `string` | `"PLAN.md"` | Path to the plan Markdown file, relative to the workspace root. Mutually exclusive with `change_ref`. |
+| `change_ref` | `string` | — | Phase 5: reference to a change manifest stored in cerebrum. Runs each listed repo sequentially and returns a JSON array of `LedgerRecord`s instead of a single record. Mutually exclusive with `plan_path`. |
+| `profile` | `string` | `CHORAGOS_DEFAULT_PROFILE` | Pipeline profile to pass to the executor. Ignored for `change_ref` runs. |
+| `slug` | `string` | derived from plan title | Override the auto-derived branch slug. Ignored for `change_ref` runs. |
 
-The tool returns the [`LedgerRecord`](#ledger-schema) as a JSON string.
+The tool returns the [`LedgerRecord`](#ledger-schema) as a JSON string (or a JSON array of `LedgerRecord`s for a `change_ref` run).
 
 ### CLI — `choragos`
 
@@ -64,17 +65,21 @@ choragos --plan plans/my-feature.md --profile fast
 
 # Override the branch slug
 choragos --slug my-custom-slug
+
+# Phase 5: run a multi-repo change manifest sequentially
+choragos --change-ref my-change-id
 ```
 
 All flags are optional:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--plan` | `PLAN.md` | Path to the plan Markdown file. |
-| `--profile` | `CHORAGOS_DEFAULT_PROFILE` | Pipeline profile. |
-| `--slug` | derived from plan title | Override the branch slug. |
+| `--plan` | `PLAN.md` | Path to the plan Markdown file. Mutually exclusive with `--change-ref`. |
+| `--change-ref` | — | Phase 5: reference to a change manifest stored in cerebrum. Runs each listed repo sequentially, prints a JSON array of `LedgerRecord`s, and exits with the worst class across all of them. Mutually exclusive with `--plan`. |
+| `--profile` | `CHORAGOS_DEFAULT_PROFILE` | Pipeline profile. Ignored for `--change-ref` runs. |
+| `--slug` | derived from plan title | Override the branch slug. Ignored for `--change-ref` runs. |
 
-Exit codes:
+Exit codes (for `--change-ref`, this reflects the worst class across every repo in the batch):
 
 | Code | Meaning |
 |------|---------|
@@ -137,6 +142,38 @@ choragos switches to it with `git switch` rather than creating a new branch.
 This allows interrupted runs to be resumed without manual cleanup.
 
 ---
+
+## Phase 5: multi-repo change manifests
+
+`--change-ref <id>` (CLI) or `change_ref` (MCP tool) fetches a change
+manifest from cerebrum under the exact `plan:<id>` scope (reusing the
+`plan:` scope kind — a change manifest is conceptually "the plan for a
+change", just JSON instead of markdown) and runs each listed repo
+**sequentially** (never in parallel — deterministic and git-safe).
+
+The manifest body is a JSON object:
+
+```json
+{
+  "repos": [
+    { "workspace": "/abs/path/repo-a", "plan_ref": "plan-id-1", "required": true },
+    { "workspace": "/abs/path/repo-b", "plan_ref": "plan-id-2", "trunk": "develop", "required": false }
+  ]
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `workspace` | `string` | — | Absolute path to the repo's workspace root. |
+| `plan_ref` | `string` | — | Reference to this repo's own plan in cerebrum, resolved exactly as a single-repo run resolves it. |
+| `trunk` | `string` | `"main"` | Trunk branch override for this repo. |
+| `required` | `bool` | `true` | When `true`, this repo finishing non-Green stops the rest of the batch (ordered-stop-on-failure — the default policy). When `false`, a failure here is recorded but the batch continues to the next repo. |
+| `profile` | `string` | the caller's default profile | Pipeline profile override for this repo. |
+| `slug_override` | `string` | derived from plan title | Branch-slug override for this repo. |
+
+Every produced `LedgerRecord` has its `change_id` field set to the
+`change_ref` value, correlating the batch's per-repo rows. Cerebrum itself
+is spawned once for the whole batch (not once per repo).
 
 ## Run-ledger
 

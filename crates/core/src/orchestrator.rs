@@ -34,6 +34,13 @@ pub struct RunInputs {
     /// explicitly for repos whose default branch is `master`/`develop`/etc.
     /// (Phase 5's per-repo manifest entries will carry this per repo.)
     pub trunk: String,
+    /// Correlates this run's [`crate::LedgerRecord`] with a Phase 5
+    /// multi-repo batch. `None` for a standalone single-repo run;
+    /// [`crate::change::run_multi`] sets this to the batch's `change_ref`
+    /// for every repo it runs, so it lands in the ledger record itself (not
+    /// just a post-hoc mutation of the returned value, which would miss the
+    /// already-written ledger line).
+    pub change_id: Option<String>,
 }
 
 impl RunInputs {
@@ -273,7 +280,7 @@ pub async fn run<R: crate::CommandRunner>(
             started_at,
             finished_at,
             schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
-            change_id: None,
+            change_id: inputs.change_id.clone(),
         };
         let _ = runner.append_ledger(&record).await;
         let _ = runner.send_telegram(&render(&record)).await;
@@ -312,7 +319,7 @@ pub async fn run<R: crate::CommandRunner>(
         started_at,
         finished_at,
         schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
-        change_id: None,
+        change_id: inputs.change_id.clone(),
     };
 
     // Append ledger (propagate errors — caller may want to know).
@@ -359,6 +366,7 @@ mod tests {
             profile: None,
             slug_override: None,
             trunk: RunInputs::default_trunk(),
+            change_id: None,
         }
     }
 
@@ -436,6 +444,35 @@ mod tests {
                 .contains("not 'develop'"),
             "reason should reference the configured trunk, got: {:?}",
             record.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn change_id_reaches_the_appended_ledger_record_not_just_the_return_value() {
+        // Regression test for a real bug found via choragos's Phase 5 Gate 2
+        // vertical slice: run_multi used to mutate ONLY the record it
+        // returned to the caller, AFTER orchestrator::run had already
+        // called append_ledger with change_id: None baked in — so the
+        // in-memory/printed record looked correct but the persisted ledger
+        // line was always missing change_id. Assert against the runner's
+        // OWN captured ledger record, not just run()'s return value, so
+        // this class of bug can't silently reappear.
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(1);
+        let mut inputs = test_inputs();
+        inputs.change_id = Some("change-abc".to_string());
+
+        let returned = run(&runner, &test_cfg(3), inputs).await.expect("run");
+        assert_eq!(returned.change_id.as_deref(), Some("change-abc"));
+
+        let appended = runner.appended_records.lock().unwrap();
+        assert_eq!(appended.len(), 1);
+        assert_eq!(
+            appended[0].change_id.as_deref(),
+            Some("change-abc"),
+            "the record actually passed to append_ledger must carry change_id, \
+             not just the value returned to the caller"
         );
     }
 

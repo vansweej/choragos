@@ -14,15 +14,23 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RunPlanArgs {
     /// Path to the plan Markdown file, relative to the workspace root.
-    /// Defaults to `"PLAN.md"` when omitted.
+    /// Defaults to `"PLAN.md"` when omitted. Mutually exclusive with
+    /// `change_ref`.
     pub plan_path: Option<String>,
 
+    /// Reference to a Phase 5 change manifest stored in cerebrum (a
+    /// `plan:<id>` scope id whose content is a JSON `ChangeManifest`).
+    /// Runs each listed repo sequentially and returns a JSON array of
+    /// `LedgerRecord`s instead of a single record. Mutually exclusive with
+    /// `plan_path`.
+    pub change_ref: Option<String>,
+
     /// Pipeline profile to use.  Falls back to `CHORAGOS_DEFAULT_PROFILE`
-    /// when omitted.
+    /// when omitted. Ignored for `change_ref` runs.
     pub profile: Option<String>,
 
     /// Override the auto-derived branch slug.  When omitted the slug is
-    /// derived from the plan title.
+    /// derived from the plan title. Ignored for `change_ref` runs.
     pub slug: Option<String>,
 }
 
@@ -52,6 +60,13 @@ impl ChoragosServer {
         &self,
         Parameters(args): Parameters<RunPlanArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if args.plan_path.is_some() && args.change_ref.is_some() {
+            return Err(rmcp::ErrorData::invalid_params(
+                "plan_path and change_ref are mutually exclusive".to_string(),
+                None,
+            ));
+        }
+
         let workspace = std::env::current_dir()
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
@@ -67,6 +82,46 @@ impl ChoragosServer {
                 rmcp::ErrorData::internal_error("non-UTF-8 workspace path".to_string(), None)
             })?
             .to_string();
+
+        if let Some(change_ref) = args.change_ref {
+            // ── Phase 5: multi-repo batch ────────────────────────────────
+            let cerebrum = std::sync::Arc::new(choragos_core::CerebrumClient::new(
+                self.config.cerebrum_bin.clone(),
+            ));
+            let manifest_body = cerebrum
+                .fetch_change(&change_ref)
+                .await
+                .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+            let manifest: choragos_core::ChangeManifest = serde_json::from_str(&manifest_body)
+                .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+
+            let cfg = (*self.config).clone();
+            let records = choragos_core::change::run_multi(
+                &self.config,
+                manifest,
+                Some(&change_ref),
+                |job: &choragos_core::RepoJob| {
+                    let job = job.clone();
+                    let cfg = cfg.clone();
+                    let cerebrum = std::sync::Arc::clone(&cerebrum);
+                    async move {
+                        choragos_core::RealRunner::with_shared_cerebrum(
+                            job.workspace,
+                            cfg.ai_coding_monorepo,
+                            cfg.telegram_bot_token,
+                            cfg.telegram_chat_id,
+                            cerebrum,
+                        )
+                    }
+                },
+            )
+            .await;
+
+            let json = serde_json::to_string(&records)
+                .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+
+            return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }
 
         let plan_path = args.plan_path.unwrap_or_else(|| "PLAN.md".to_string());
 

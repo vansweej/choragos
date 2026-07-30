@@ -1,6 +1,7 @@
 //! Production [`CommandRunner`] implementation backed by git, gh, bun, and reqwest.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::{CerebrumClient, CoreError, LedgerRecord, Memory, Pipeline, Sink, Vcs};
 
@@ -23,12 +24,19 @@ pub struct RealRunner {
     pub telegram_bot_token: Option<String>,
     /// Telegram chat ID, if configured.
     pub telegram_chat_id: Option<String>,
-    /// Cerebrum MCP client (lazily connects on first use).
-    pub cerebrum: CerebrumClient,
+    /// Cerebrum MCP client (lazily connects on first use). Shared via `Arc`
+    /// so a multi-repo batch (Phase 5's `run_multi`) can construct one
+    /// [`RealRunner`] per repo workdir while spawning cerebrum only once —
+    /// see [`RealRunner::with_shared_cerebrum`].
+    pub cerebrum: Arc<CerebrumClient>,
 }
 
 impl RealRunner {
-    /// Creates a new [`RealRunner`] operating on `workdir`.
+    /// Creates a new [`RealRunner`] operating on `workdir`, owning a fresh
+    /// [`CerebrumClient`] (wrapped in its own `Arc`). For a single-repo run
+    /// this is the usual entry point; for a multi-repo batch, construct one
+    /// shared client and use [`RealRunner::with_shared_cerebrum`] per repo
+    /// instead, so cerebrum is spawned only once for the whole batch.
     pub fn new(
         workdir: impl Into<PathBuf>,
         ai_coding_monorepo: impl Into<String>,
@@ -36,12 +44,32 @@ impl RealRunner {
         telegram_chat_id: Option<String>,
         cerebrum_bin: impl Into<String>,
     ) -> Self {
+        Self::with_shared_cerebrum(
+            workdir,
+            ai_coding_monorepo,
+            telegram_bot_token,
+            telegram_chat_id,
+            Arc::new(CerebrumClient::new(cerebrum_bin)),
+        )
+    }
+
+    /// Creates a new [`RealRunner`] operating on `workdir`, sharing an
+    /// already-constructed [`CerebrumClient`] (e.g. across every repo in a
+    /// Phase 5 multi-repo batch, so cerebrum is spawned once per batch, not
+    /// once per repo).
+    pub fn with_shared_cerebrum(
+        workdir: impl Into<PathBuf>,
+        ai_coding_monorepo: impl Into<String>,
+        telegram_bot_token: Option<String>,
+        telegram_chat_id: Option<String>,
+        cerebrum: Arc<CerebrumClient>,
+    ) -> Self {
         Self {
             workdir: workdir.into(),
             ai_coding_monorepo: ai_coding_monorepo.into(),
             telegram_bot_token,
             telegram_chat_id,
-            cerebrum: CerebrumClient::new(cerebrum_bin),
+            cerebrum,
         }
     }
 }

@@ -29,6 +29,9 @@ pub mod telegram;
 
 pub mod orchestrator;
 
+pub mod change;
+pub use change::{ChangeManifest, RepoJob};
+
 #[cfg(not(tarpaulin_include))]
 pub mod real_runner;
 #[cfg(not(tarpaulin_include))]

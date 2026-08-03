@@ -13,16 +13,15 @@ use serde::Deserialize;
 /// Arguments accepted by the `choragos_run_plan` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RunPlanArgs {
-    /// Path to the plan Markdown file, relative to the workspace root.
-    /// Defaults to `"PLAN.md"` when omitted. Mutually exclusive with
-    /// `change_ref`.
-    pub plan_path: Option<String>,
+    /// Reference to a plan stored in cerebrum (a `plan:<id>` scope id).
+    /// Mutually exclusive with `change_ref`.
+    pub plan_ref: Option<String>,
 
     /// Reference to a Phase 5 change manifest stored in cerebrum (a
     /// `plan:<id>` scope id whose content is a JSON `ChangeManifest`).
     /// Runs each listed repo sequentially and returns a JSON array of
     /// `LedgerRecord`s instead of a single record. Mutually exclusive with
-    /// `plan_path`.
+    /// `plan_ref`.
     pub change_ref: Option<String>,
 
     /// Pipeline profile to use.  Falls back to `CHORAGOS_DEFAULT_PROFILE`
@@ -60,9 +59,9 @@ impl ChoragosServer {
         &self,
         Parameters(args): Parameters<RunPlanArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if args.plan_path.is_some() && args.change_ref.is_some() {
+        if args.plan_ref.is_some() && args.change_ref.is_some() {
             return Err(rmcp::ErrorData::invalid_params(
-                "plan_path and change_ref are mutually exclusive".to_string(),
+                "plan_ref and change_ref are mutually exclusive".to_string(),
                 None,
             ));
         }
@@ -123,7 +122,9 @@ impl ChoragosServer {
             return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
 
-        let plan_path = args.plan_path.unwrap_or_else(|| "PLAN.md".to_string());
+        let plan_ref = args.plan_ref.ok_or_else(|| {
+            rmcp::ErrorData::invalid_params("plan_ref or change_ref is required".to_string(), None)
+        })?;
 
         let runner = choragos_core::RealRunner::new(
             workspace.clone(),
@@ -136,7 +137,7 @@ impl ChoragosServer {
         let inputs = choragos_core::orchestrator::RunInputs {
             workspace: workspace_str,
             repo,
-            plan_ref: plan_path,
+            plan_ref,
             profile: args.profile,
             slug_override: args.slug,
             trunk: choragos_core::orchestrator::RunInputs::default_trunk(),

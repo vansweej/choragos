@@ -67,6 +67,11 @@ struct ProduceOutcome {
 /// Runs plan fetch, branch management, the retry loop, and captures
 /// post-run git state. Does not touch anything outside the local repo and
 /// the plan-cycle executor — no push, no PR, no ledger, no Telegram.
+///
+/// `branch`, `slug`, and `title` are pre-derived by the caller (see
+/// [`run`]) so that the branch-staleness gate can run before this function
+/// (and before a cerebrum session is opened).
+#[allow(clippy::too_many_arguments)]
 async fn produce<R: crate::CommandRunner>(
     runner: &R,
     cfg: &crate::Config,
@@ -74,25 +79,14 @@ async fn produce<R: crate::CommandRunner>(
     profile: &str,
     session: &str,
     base_sha: &str,
+    branch: &str,
+    slug: &str,
+    title: &str,
 ) -> Result<ProduceOutcome, crate::CoreError> {
-    // ── Read plan and derive branch ───────────────────────────────────────
-    let plan_contents = runner.fetch_plan(&inputs.plan_ref).await?;
-    let title = crate::plan::parse_title(&plan_contents).ok_or_else(|| {
-        crate::CoreError::Message(format!(
-            "no level-1 heading found in plan '{}'",
-            inputs.plan_ref
-        ))
-    })?;
-    let slug = inputs
-        .slug_override
-        .clone()
-        .unwrap_or_else(|| crate::plan::slugify(&title));
-    let branch = crate::plan::branch_name(&slug);
-
-    if runner.branch_exists(&branch).await? {
-        runner.switch_branch(&branch).await?;
+    if runner.branch_exists(branch).await? {
+        runner.switch_branch(branch).await?;
     } else {
-        runner.create_branch(&branch).await?;
+        runner.create_branch(branch).await?;
     }
 
     // ── Retry loop ────────────────────────────────────────────────────────
@@ -117,9 +111,9 @@ async fn produce<R: crate::CommandRunner>(
     let commits_ahead = runner.commits_ahead(base_sha).await?;
 
     Ok(ProduceOutcome {
-        branch,
-        slug,
-        title,
+        branch: branch.to_string(),
+        slug: slug.to_string(),
+        title: title.to_string(),
         base_sha: base_sha.to_string(),
         head_sha,
         commits_ahead,
@@ -219,15 +213,23 @@ async fn publish<R: crate::CommandRunner>(
 ///    `<trunk>` matches the remote. `<trunk>` defaults to `"main"`
 ///    ([`RunInputs::trunk`]). Any failure returns a Red [`crate::LedgerRecord`]
 ///    immediately without creating a branch.
-/// 2. **Branch management** — captures `base_sha`, reads the plan, derives
-///    the slug and branch name, then creates or switches to the feature branch.
-/// 3. **Retry loop** — calls `run_plan_cycle` up to `cfg.max_attempts` times,
+/// 2. **Branch-staleness gate** — captures `base_sha`, reads the plan, and
+///    derives the slug and branch name. If a branch matching that name
+///    already exists locally but does not contain `base_sha` (i.e. it is
+///    not a legitimate resume target built atop the current trunk), returns
+///    a Red [`crate::LedgerRecord`] with an explanatory reason, without
+///    touching the branch or opening a cerebrum session. This prevents a
+///    stale leftover branch from silently producing a false-green
+///    "no changes to land" result.
+/// 3. **Branch management** — creates or switches to the feature branch.
+/// 4. **Retry loop** — calls `run_plan_cycle` up to `cfg.max_attempts` times,
 ///    stopping early on exit codes `0` (green) or `3` (red).
-/// 4. **Post-run invariant** — if the executor exited `0` but left the tree
-///    dirty the result is overridden to Red.
-/// 5. **PR decision** — opens a PR only on a green run with commits ahead of
+/// 5. **Post-run invariants** — if the executor exited `0` but left the tree
+///    dirty, or if `HEAD` does not descend from `base_sha`, the result is
+///    overridden to Red.
+/// 6. **PR decision** — opens a PR only on a green run with commits ahead of
 ///    `base_sha`.
-/// 6. **Finalise** — appends the ledger record and sends a Telegram
+/// 7. **Finalise** — appends the ledger record and sends a Telegram
 ///    notification (both best-effort; errors are logged and swallowed).
 ///
 /// # Errors
@@ -290,14 +292,68 @@ pub async fn run<R: crate::CommandRunner>(
     // ── Capture base_sha BEFORE creating any branch ───────────────────────
     let base_sha = runner.head_sha().await?;
 
+    // ── Read plan and derive branch (before opening a session or touching
+    // any branch, so the staleness gate below can abort cleanly) ─────────
+    let plan_contents = runner.fetch_plan(&inputs.plan_ref).await?;
+    let title = crate::plan::parse_title(&plan_contents).ok_or_else(|| {
+        crate::CoreError::Message(format!(
+            "no level-1 heading found in plan '{}'",
+            inputs.plan_ref
+        ))
+    })?;
+    let slug = inputs
+        .slug_override
+        .clone()
+        .unwrap_or_else(|| crate::plan::slugify(&title));
+    let branch = crate::plan::branch_name(&slug);
+
+    // ── Branch-staleness gate ──────────────────────────────────────────────
+    //
+    // A pre-existing branch matching the derived slug is only a legitimate
+    // resume target when it contains base_sha (i.e. it was built atop the
+    // current trunk). Otherwise it's a stale leftover — commonly from an
+    // earlier, unrelated run — and blindly adopting it would make
+    // `commits_ahead(base_sha)` silently return 0, producing a false-green
+    // "no changes to land" result instead of ever running the plan.
+    if runner.branch_exists(&branch).await? && !runner.branch_contains(&branch, &base_sha).await? {
+        let finished_at = chrono::Utc::now().to_rfc3339();
+        let record = crate::LedgerRecord {
+            plan_id: slug.clone(),
+            repo: inputs.repo.clone(),
+            branch: branch.clone(),
+            profile: profile.clone(),
+            exit_code: -1,
+            attempts: 0,
+            failure_class: crate::FailureClass::Red,
+            base_sha: base_sha.clone(),
+            head_sha: String::new(),
+            commits_ahead: 0,
+            pr_url: None,
+            reason: Some(format!(
+                "existing branch '{branch}' is stale: it does not contain the current \
+                 {trunk} tip {base_sha}; delete the branch or pass --slug/--change-ref"
+            )),
+            started_at,
+            finished_at,
+            schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+            change_id: inputs.change_id.clone(),
+        };
+        let _ = runner.append_ledger(&record).await;
+        let _ = runner.send_telegram(&render(&record)).await;
+        return Ok(record);
+    }
+
     // ── Open a cerebrum session for this run ──────────────────────────────
     //
     // The session outlives individual plan-cycle attempts so that a retry
     // can recall progress notes left behind by an earlier attempt.
     let session = runner.begin_session(&inputs.plan_ref).await?;
 
-    // ── Produce: plan fetch, branch mgmt, retry loop, post-run git state ──
-    let outcome = produce(runner, cfg, &inputs, &profile, &session, &base_sha).await?;
+    // ── Produce: branch mgmt, retry loop, post-run git state ──────────────
+    let outcome = produce(
+        runner, cfg, &inputs, &profile, &session, &base_sha, &branch, &slug, &title,
+    )
+    .await?;
 
     // ── Publish: failure-class + idempotent find-or-create PR decision ───
     let (failure_class, pr_url, reason) = publish(runner, &outcome, trunk).await;
@@ -701,6 +757,7 @@ mod tests {
         runner.push_exit_code(0);
         runner.set_commits_ahead(1);
         runner.set_branch_exists(true);
+        runner.set_branch_contains(true);
 
         let record = run(&runner, &test_cfg(3), test_inputs())
             .await
@@ -723,6 +780,53 @@ mod tests {
 
         let tg = runner.sent_telegrams.lock().unwrap();
         assert_eq!(tg.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stale_existing_branch_yields_red_no_switch_no_session() {
+        // Regression test for the false-green bug: an existing branch
+        // matching the derived slug that does NOT contain base_sha must
+        // abort Red with an explanatory reason, without ever switching to
+        // it or opening a cerebrum session — mirroring the clean-start
+        // gate's abort semantics.
+        let mut runner = FakeRunner::new();
+        runner.set_branch_exists(true);
+        runner.set_branch_contains(false);
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(0);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        assert_eq!(record.failure_class, FailureClass::Red);
+        assert_eq!(record.exit_code, -1);
+        assert_eq!(record.attempts, 0);
+        assert!(
+            record.reason.as_deref().unwrap_or("").contains("stale"),
+            "reason should mention the branch is stale, got: {:?}",
+            record.reason
+        );
+
+        let ops = runner.branch_ops.lock().unwrap();
+        assert!(
+            ops.is_empty(),
+            "no branch switch/create should happen on a stale-branch abort"
+        );
+        drop(ops);
+
+        let ledger = runner.appended_records.lock().unwrap();
+        assert_eq!(ledger.len(), 1);
+        drop(ledger);
+
+        let tg = runner.sent_telegrams.lock().unwrap();
+        assert_eq!(tg.len(), 1);
+
+        let sessions_begun = runner.sessions_begun.lock().unwrap();
+        assert!(
+            sessions_begun.is_empty(),
+            "stale-branch abort must not open a cerebrum session"
+        );
     }
 
     #[tokio::test]

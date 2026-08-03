@@ -47,8 +47,8 @@ All arguments are optional:
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `plan_path` | `string` | `"PLAN.md"` | Path to the plan Markdown file, relative to the workspace root. Mutually exclusive with `change_ref`. |
-| `change_ref` | `string` | — | Phase 5: reference to a change manifest stored in cerebrum. Runs each listed repo sequentially and returns a JSON array of `LedgerRecord`s instead of a single record. Mutually exclusive with `plan_path`. |
+| `plan_ref` | `string` | — | Reference to a plan stored in cerebrum (a `plan:<id>` scope id). Mutually exclusive with `change_ref`. |
+| `change_ref` | `string` | — | Phase 5: reference to a change manifest stored in cerebrum. Runs each listed repo sequentially and returns a JSON array of `LedgerRecord`s instead of a single record. Mutually exclusive with `plan_ref`. |
 | `profile` | `string` | `CHORAGOS_DEFAULT_PROFILE` | Pipeline profile to pass to the executor. Ignored for `change_ref` runs. |
 | `slug` | `string` | derived from plan title | Override the auto-derived branch slug. Ignored for `change_ref` runs. |
 
@@ -57,11 +57,8 @@ The tool returns the [`LedgerRecord`](#ledger-schema) as a JSON string (or a JSO
 ### CLI — `choragos`
 
 ```sh
-# Run with all defaults (reads PLAN.md in the current directory)
-choragos
-
-# Specify a different plan file and profile
-choragos --plan plans/my-feature.md --profile fast
+# Run against a plan stored in cerebrum
+choragos --plan-ref <cerebrum-plan-id> --profile fast
 
 # Override the branch slug
 choragos --slug my-custom-slug
@@ -70,12 +67,12 @@ choragos --slug my-custom-slug
 choragos --change-ref my-change-id
 ```
 
-All flags are optional:
+All flags are optional unless noted:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--plan` | `PLAN.md` | Path to the plan Markdown file. Mutually exclusive with `--change-ref`. |
-| `--change-ref` | — | Phase 5: reference to a change manifest stored in cerebrum. Runs each listed repo sequentially, prints a JSON array of `LedgerRecord`s, and exits with the worst class across all of them. Mutually exclusive with `--plan`. |
+| `--plan-ref` | — | Reference to a plan stored in cerebrum. Required unless `--change-ref`. |
+| `--change-ref` | — | Phase 5: reference to a change manifest stored in cerebrum. Runs each listed repo sequentially, prints a JSON array of `LedgerRecord`s, and exits with the worst class across all of them. Mutually exclusive with `--plan-ref`. |
 | `--profile` | `CHORAGOS_DEFAULT_PROFILE` | Pipeline profile. Ignored for `--change-ref` runs. |
 | `--slug` | derived from plan title | Override the branch slug. Ignored for `--change-ref` runs. |
 
@@ -115,6 +112,11 @@ needed to open it) and records low-salience (`0.4`) progress notes under it
 per plan-cycle attempt; on finalize, all memories under that session scope
 are cleaned up best-effort (never a global `end_session`, which would
 affect other concurrent sessions sharing the same store).
+
+**Note:** a plan must be promoted to cerebrum's Cortex (long-term) tier via
+`memorize` before choragos can fetch it with `--plan-ref` / `plan_ref`.
+`remember` alone stores the memory only in the ephemeral Synapse tier,
+which choragos's separately-spawned cerebrum process does not share.
 
 ---
 
@@ -245,13 +247,13 @@ export AI_CODING_MONOREPO="$HOME/Projects/ai-coding"
 export CHORAGOS_DEFAULT_PROFILE="default"
 export CEREBRUM_BIN="$(which cerebrum)"
 
-# 3. Place your plan at PLAN.md (or pass --plan <path>).
-#    The first level-1 heading determines the branch slug:
+# 3. Promote your plan into cerebrum's Cortex tier (via `memorize`) under a
+#    `plan:<id>` scope. The first level-1 heading determines the branch slug:
 #      # Feature: my cool feature
 #    → branch: feat/my-cool-feature
 
-# 4. Run choragos.
-choragos
+# 4. Run choragos, passing the plan's cerebrum id.
+choragos --plan-ref <cerebrum-plan-id>
 
 # On success the LedgerRecord is printed as pretty JSON and a PR is opened
 # if commits were produced.  The CLI exits 0 (Green), 1 (Orange), or 2 (Red).

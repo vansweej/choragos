@@ -1,7 +1,7 @@
 //! choragos — CLI mirroring the `choragos_run_plan` MCP tool.
 //!
-//! Parses `--plan`, `--profile`, and `--slug` for a single-repo run, or
-//! `--change-ref` (mutually exclusive with `--plan`) for a Phase 5
+//! Parses `--plan-ref`, `--profile`, and `--slug` for a single-repo run, or
+//! `--change-ref` (mutually exclusive with `--plan-ref`) for a Phase 5
 //! multi-repo batch, runs the plan-cycle orchestrator, prints the
 //! resulting [`LedgerRecord`](s) as pretty JSON, and exits with a code
 //! reflecting the worst [`FailureClass`] across all records produced:
@@ -21,17 +21,20 @@ use clap::Parser;
 #[command(author, version, about)]
 struct Args {
     /// Reference to a plan stored in cerebrum (a `plan:<id>` scope id).
-    /// Defaults to `"PLAN.md"` for backward compatibility when neither
-    /// `--plan` nor `--change-ref` is given. Mutually exclusive with
+    /// Required unless `--change-ref` is given. Mutually exclusive with
     /// `--change-ref`.
-    #[arg(long, conflicts_with = "change_ref")]
-    plan: Option<String>,
+    #[arg(
+        long = "plan-ref",
+        conflicts_with = "change_ref",
+        required_unless_present = "change_ref"
+    )]
+    plan_ref: Option<String>,
 
     /// Reference to a Phase 5 change manifest stored in cerebrum (a
     /// `plan:<id>` scope id whose content is a JSON `ChangeManifest`).
     /// Runs each listed repo sequentially via `run_multi`. Mutually
-    /// exclusive with `--plan`.
-    #[arg(long, conflicts_with = "plan")]
+    /// exclusive with `--plan-ref`.
+    #[arg(long, conflicts_with = "plan_ref")]
     change_ref: Option<String>,
 
     /// Pipeline profile to use.  Falls back to `CHORAGOS_DEFAULT_PROFILE`
@@ -116,7 +119,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── Single-repo run ───────────────────────────────────────────────────
-    let plan_ref = args.plan.unwrap_or_else(|| "PLAN.md".to_string());
+    let plan_ref = args
+        .plan_ref
+        .expect("clap guarantees --plan-ref is present unless --change-ref");
 
     let runner = choragos_core::RealRunner::new(
         workspace.clone(),
@@ -142,4 +147,27 @@ async fn main() -> anyhow::Result<()> {
     println!("{json}");
 
     std::process::exit(worst_exit_code(std::slice::from_ref(&record)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Args::command().debug_assert();
+    }
+
+    #[test]
+    fn requires_plan_ref_or_change_ref() {
+        assert!(Args::try_parse_from(["choragos"]).is_err());
+    }
+
+    #[test]
+    fn plan_ref_and_change_ref_are_mutually_exclusive() {
+        assert!(
+            Args::try_parse_from(["choragos", "--plan-ref", "p", "--change-ref", "c"]).is_err()
+        );
+    }
 }

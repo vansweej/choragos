@@ -159,6 +159,37 @@ impl Vcs for RealRunner {
         Ok(output.status.success())
     }
 
+    async fn branch_contains(&self, branch: &str, commit: &str) -> Result<bool, CoreError> {
+        // A non-zero exit here is a meaningful result (not-an-ancestor), not
+        // a failure, so this bypasses the `git_in` helper (which treats any
+        // non-zero exit as an error) and inspects the exit code directly.
+        let output = tokio::process::Command::new("git")
+            .current_dir(&self.workdir)
+            .args(["merge-base", "--is-ancestor", commit, branch])
+            .output()
+            .await
+            .map_err(|e| CoreError::Command {
+                context: format!("git merge-base --is-ancestor {commit} {branch}"),
+                message: e.to_string(),
+            })?;
+
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(CoreError::Command {
+                context: format!("git merge-base --is-ancestor {commit} {branch}"),
+                message: {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    if stderr.is_empty() {
+                        "unknown exit".to_string()
+                    } else {
+                        stderr
+                    }
+                },
+            }),
+        }
+    }
+
     async fn create_branch(&self, name: &str) -> Result<(), CoreError> {
         git_in(&self.workdir, &["switch", "-c", name]).await?;
         Ok(())
@@ -398,6 +429,26 @@ mod git_integration_tests {
 
         r.switch_branch("main").await.unwrap();
         assert_eq!(r.current_branch().await.unwrap(), "main");
+    }
+
+    #[tokio::test]
+    async fn branch_contains_detects_ancestor_and_non_ancestor() {
+        let dir = init_repo_with_commit().await;
+        let r = runner_for(dir.path());
+
+        let sha0 = r.head_sha().await.unwrap();
+
+        r.create_branch("b1").await.unwrap();
+        r.switch_branch("main").await.unwrap();
+
+        commit_file(dir.path(), "f.txt", "a").await;
+        let sha1 = r.head_sha().await.unwrap();
+
+        // b1's tip is exactly sha0, so it contains sha0 (equal counts as
+        // ancestor) but not the later sha1.
+        assert!(r.branch_contains("b1", &sha0).await.unwrap());
+        assert!(!r.branch_contains("b1", &sha1).await.unwrap());
+        assert!(r.branch_contains("main", &sha0).await.unwrap());
     }
 
     #[tokio::test]

@@ -36,6 +36,11 @@ pub struct FakeRunner {
     ///
     /// [`branch_exists`]: CommandRunner::branch_exists
     branch_exists_flag: Mutex<bool>,
+    /// Whether [`branch_contains`] returns `true`. Defaults to `true` so
+    /// existing resume-branch tests keep switching rather than aborting.
+    ///
+    /// [`branch_contains`]: CommandRunner::branch_contains
+    branch_contains_flag: Mutex<bool>,
     /// Value returned by [`head_sha`].
     ///
     /// [`head_sha`]: CommandRunner::head_sha
@@ -121,6 +126,7 @@ impl FakeRunner {
             tree_clean: Mutex::new(true),
             local_matches_remote_flag: Mutex::new(true),
             branch_exists_flag: Mutex::new(false),
+            branch_contains_flag: Mutex::new(true),
             scripted_head_sha: Mutex::new("sha-base".to_string()),
             scripted_commits_ahead: Mutex::new(1),
             plan_contents: Mutex::new("# Feature: test plan\n\nsome body".to_string()),
@@ -186,6 +192,14 @@ impl FakeRunner {
     /// [`branch_exists`]: CommandRunner::branch_exists
     pub fn set_branch_exists(&mut self, value: bool) -> &mut Self {
         *self.branch_exists_flag.lock().unwrap() = value;
+        self
+    }
+
+    /// Controls whether [`branch_contains`] returns `true`.
+    ///
+    /// [`branch_contains`]: CommandRunner::branch_contains
+    pub fn set_branch_contains(&mut self, value: bool) -> &mut Self {
+        *self.branch_contains_flag.lock().unwrap() = value;
         self
     }
 
@@ -336,6 +350,10 @@ impl Vcs for FakeRunner {
 
     async fn branch_exists(&self, _name: &str) -> Result<bool, CoreError> {
         Ok(*self.branch_exists_flag.lock().unwrap())
+    }
+
+    async fn branch_contains(&self, _branch: &str, _commit: &str) -> Result<bool, CoreError> {
+        Ok(*self.branch_contains_flag.lock().unwrap())
     }
 
     async fn create_branch(&self, name: &str) -> Result<(), CoreError> {

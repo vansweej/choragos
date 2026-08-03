@@ -40,6 +40,17 @@ pub trait Vcs: Send + Sync {
         name: &str,
     ) -> impl Future<Output = Result<bool, crate::CoreError>> + Send;
 
+    /// Returns `true` when `branch`'s tip contains `commit` (i.e. `commit`
+    /// is an ancestor of, or equal to, `branch`). Used to distinguish a
+    /// legitimate resume branch built atop the current trunk from a
+    /// stale/divergent branch that would produce a misleading
+    /// commits-ahead count.
+    fn branch_contains(
+        &self,
+        branch: &str,
+        commit: &str,
+    ) -> impl Future<Output = Result<bool, crate::CoreError>> + Send;
+
     /// Creates a new local branch with `name` and switches to it.
     fn create_branch(
         &self,

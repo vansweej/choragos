@@ -147,6 +147,30 @@ async fn publish<R: crate::CommandRunner>(
         );
     }
 
+    // Post-run invariant: green exit but HEAD does not descend from
+    // base_sha → Red override. This is a defense-in-depth catch-all,
+    // independent of the pre-switch branch-staleness gate in `run`: it
+    // guards against ANY future code path that could land on a
+    // divergent/stale branch, not just the one this gate currently
+    // prevents.
+    let head_descends_from_base = runner
+        .branch_contains("HEAD", &outcome.base_sha)
+        .await
+        .unwrap_or(false);
+
+    if outcome.exit_code == 0 && !head_descends_from_base {
+        return (
+            crate::FailureClass::Red,
+            None,
+            Some(format!(
+                "post-run invariant: HEAD {head} does not descend from base {base} — \
+                 adopted a divergent/stale branch",
+                head = outcome.head_sha,
+                base = outcome.base_sha,
+            )),
+        );
+    }
+
     match crate::FailureClass::from_exit_code(outcome.exit_code) {
         crate::FailureClass::Green => {
             if outcome.commits_ahead > 0 {
@@ -451,10 +475,47 @@ mod tests {
         drop(ledger);
 
         let tg = runner.sent_telegrams.lock().unwrap();
-        assert_eq!(tg.len(), 1, "send_telegram attempted once");
+        assert_eq!(tg.len(), 1);
     }
 
     #[tokio::test]
+    async fn green_exit_but_head_not_descended_from_base_is_red_override() {
+        // Defense-in-depth: even when the pre-switch staleness gate is
+        // bypassed (branch_exists is false here, so `produce` creates a
+        // fresh branch normally), publish() must still refuse Green if
+        // HEAD doesn't descend from base_sha.
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(2);
+        runner.set_branch_exists(false);
+        runner.set_branch_contains(false);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        assert_eq!(record.failure_class, FailureClass::Red);
+        assert!(record.pr_url.is_none());
+        assert!(
+            record
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("does not descend"),
+            "reason should mention HEAD not descending from base, got: {:?}",
+            record.reason
+        );
+
+        let ledger = runner.appended_records.lock().unwrap();
+        assert_eq!(ledger.len(), 1);
+        drop(ledger);
+
+        let tg = runner.sent_telegrams.lock().unwrap();
+        assert_eq!(tg.len(), 1);
+    }
+
+    #[tokio::test]
+
     async fn off_main_yields_red_and_no_branch() {
         let mut runner = FakeRunner::new();
         runner.set_on_main(false);

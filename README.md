@@ -140,8 +140,35 @@ opened.
 ## Resume-on-existing-branch behaviour
 
 If the feature branch `feat/<slug>` already exists locally when a run starts,
-choragos switches to it with `git switch` rather than creating a new branch.
-This allows interrupted runs to be resumed without manual cleanup.
+choragos treats it as a resume target **only if it contains the current
+trunk tip** (`base_sha`) — i.e. it was built atop the current trunk, checked
+via `git merge-base --is-ancestor`. In that case choragos switches to it with
+`git switch` rather than creating a new branch, allowing interrupted runs to
+be resumed without manual cleanup.
+
+If the existing branch does **not** contain `base_sha` — a stale leftover
+from an earlier, unrelated run, for example — the run aborts with a Red
+`LedgerRecord` and a reason naming the branch, instead of silently adopting
+it. (Adopting a stale branch would make `commits_ahead(base_sha)` return 0,
+producing a false-green "no changes to land" result without ever running the
+plan.) Delete the stale branch or pass `--slug`/`slug` to pick a different
+name.
+
+As a second, independent safety net, choragos also refuses to report a run as
+Green unless `HEAD` still descends from `base_sha` at the end of the run —
+this catches any other path that might land on a divergent branch, not just
+branch-name reuse.
+
+**Self-hosting hazard:** running choragos against its own repo (or any repo
+with lingering old `feat/*` branches) is the most likely place to hit this.
+Clean up stale `feat/*` branches (`git branch -D feat/...`) before invoking
+choragos on a repo you've run it against before.
+
+**Known limitation:** this check only inspects the **local** branch. A stale
+**remote** `origin/feat/<slug>` is not yet gated — it would instead surface
+later as a non-fast-forward `push_head` failure, which currently degrades to
+Green with an explanatory reason rather than aborting Red. Guarding the
+remote branch is a tracked follow-up.
 
 ---
 

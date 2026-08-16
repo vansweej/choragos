@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// backwards-compatible way (new optional field). Old ledger lines lacking
 /// `schema_version` are treated as version 1 (see
 /// [`default_schema_version`]).
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 /// Default for [`LedgerRecord::schema_version`] when deserialising a line
 /// written before the field existed (schema version 1).
@@ -24,6 +24,8 @@ fn default_schema_version() -> u32 {
 /// one [`LedgerRecord`] as a compact JSON line to the ledger file.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LedgerRecord {
+    /// Opaque identifier for this run (distinct from `plan_id`).
+    pub run_id: String,
     /// Opaque identifier for the plan (typically the branch slug).
     pub plan_id: String,
     /// Repository name (directory basename of the workspace).
@@ -108,6 +110,7 @@ mod tests {
 
     fn sample_record() -> LedgerRecord {
         LedgerRecord {
+            run_id: "run-choragos-v1-1".to_string(),
             plan_id: "choragos-v1".to_string(),
             repo: "choragos".to_string(),
             branch: "feat/choragos-v1".to_string(),
@@ -171,6 +174,7 @@ mod tests {
         // A line written before schema_version/change_id existed.
         let v1_line = serde_json::json!({
             "plan_id": "choragos-v1",
+            "run_id": "run-choragos-v1-1",
             "repo": "choragos",
             "branch": "feat/choragos-v1",
             "profile": "default",

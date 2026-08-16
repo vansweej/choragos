@@ -76,6 +76,7 @@ fn error_record(
 ) -> crate::LedgerRecord {
     let finished_at = chrono::Utc::now().to_rfc3339();
     crate::LedgerRecord {
+        run_id: format!("run-{}-error", repo_name_from_workspace(&job.workspace)),
         plan_id: String::new(),
         repo: repo_name_from_workspace(&job.workspace),
         branch: job

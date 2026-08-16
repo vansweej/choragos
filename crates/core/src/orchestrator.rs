@@ -291,6 +291,7 @@ pub async fn run<R: crate::CommandRunner>(
     if let Some(reason) = abort_reason {
         let finished_at = chrono::Utc::now().to_rfc3339();
         let record = crate::LedgerRecord {
+            run_id: format!("run-{}-abort", inputs.repo),
             plan_id: String::new(),
             repo: inputs.repo.clone(),
             branch: trunk.to_string(),
@@ -342,6 +343,7 @@ pub async fn run<R: crate::CommandRunner>(
     if runner.branch_exists(&branch).await? && !runner.branch_contains(&branch, &base_sha).await? {
         let finished_at = chrono::Utc::now().to_rfc3339();
         let record = crate::LedgerRecord {
+            run_id: format!("run-{slug}-stale"),
             plan_id: slug.clone(),
             repo: inputs.repo.clone(),
             branch: branch.clone(),
@@ -384,6 +386,7 @@ pub async fn run<R: crate::CommandRunner>(
 
     let finished_at = chrono::Utc::now().to_rfc3339();
     let record = crate::LedgerRecord {
+        run_id: format!("run-{}", outcome.slug),
         plan_id: outcome.slug.clone(),
         repo: inputs.repo.clone(),
         branch: outcome.branch.clone(),

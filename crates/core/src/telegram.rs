@@ -43,6 +43,7 @@ mod tests {
 
     fn base_record(failure_class: FailureClass) -> LedgerRecord {
         LedgerRecord {
+            run_id: "run-choragos-v1".to_string(),
             plan_id: "choragos-v1".to_string(),
             repo: "choragos".to_string(),
             branch: "feat/choragos-v1".to_string(),

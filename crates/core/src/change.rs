@@ -75,8 +75,9 @@ fn error_record(
     error: &crate::CoreError,
 ) -> crate::LedgerRecord {
     let finished_at = chrono::Utc::now().to_rfc3339();
+    let error_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
     crate::LedgerRecord {
-        run_id: format!("run-{}-error", repo_name_from_workspace(&job.workspace)),
+        run_id: format!("run-{error_nanos}"),
         plan_id: String::new(),
         repo: repo_name_from_workspace(&job.workspace),
         branch: job

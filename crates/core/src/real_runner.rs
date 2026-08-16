@@ -283,6 +283,7 @@ impl Pipeline for RealRunner {
         profile: &str,
         session: &str,
     ) -> Result<i32, CoreError> {
+        let run_id = crate::orchestrator::run_id_from_session(session);
         let status = tokio::process::Command::new("bun")
             .args([
                 "run",
@@ -295,6 +296,8 @@ impl Pipeline for RealRunner {
                 plan_ref,
                 "--session",
                 session,
+                "--run-id",
+                &run_id,
                 "--profile",
                 profile,
                 "--verbose",
@@ -400,6 +403,14 @@ mod git_integration_tests {
             None,
             "/nonexistent-cerebrum-bin",
         )
+    }
+
+    #[test]
+    fn run_id_from_session_used_by_run_plan_cycle_is_distinct_from_session() {
+        let session = "session:plan-xyz:987654321";
+        let run_id = crate::orchestrator::run_id_from_session(session);
+        assert_ne!(run_id, session);
+        assert!(run_id.contains("987654321"));
     }
 
     #[tokio::test]

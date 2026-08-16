@@ -13,6 +13,19 @@
 
 use crate::telegram::render;
 
+/// Derives a run-id from a session string of the form
+/// `session:{plan_ref}:{nanos}` by taking the final `:`-delimited segment.
+/// Falls back to a deterministic value derived from the whole session
+/// string when the shape doesn't match (e.g. a test double's
+/// `"session:{plan_ref}"` with no nanos segment). Never panics, never
+/// returns an empty string.
+pub fn run_id_from_session(session: &str) -> String {
+    match session.rsplit(':').next() {
+        Some(nanos) if !nanos.is_empty() && nanos != session => format!("run-{nanos}"),
+        _ => format!("run-{session}"),
+    }
+}
+
 /// Inputs supplied by the caller (MCP tool or CLI) for a single run.
 #[derive(Debug, Clone)]
 pub struct RunInputs {
@@ -290,8 +303,9 @@ pub async fn run<R: crate::CommandRunner>(
 
     if let Some(reason) = abort_reason {
         let finished_at = chrono::Utc::now().to_rfc3339();
+        let abort_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
         let record = crate::LedgerRecord {
-            run_id: format!("run-{}-abort", inputs.repo),
+            run_id: format!("run-{abort_nanos}"),
             plan_id: String::new(),
             repo: inputs.repo.clone(),
             branch: trunk.to_string(),
@@ -342,8 +356,9 @@ pub async fn run<R: crate::CommandRunner>(
     // "no changes to land" result instead of ever running the plan.
     if runner.branch_exists(&branch).await? && !runner.branch_contains(&branch, &base_sha).await? {
         let finished_at = chrono::Utc::now().to_rfc3339();
+        let stale_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
         let record = crate::LedgerRecord {
-            run_id: format!("run-{slug}-stale"),
+            run_id: format!("run-{stale_nanos}"),
             plan_id: slug.clone(),
             repo: inputs.repo.clone(),
             branch: branch.clone(),
@@ -374,6 +389,7 @@ pub async fn run<R: crate::CommandRunner>(
     // The session outlives individual plan-cycle attempts so that a retry
     // can recall progress notes left behind by an earlier attempt.
     let session = runner.begin_session(&inputs.plan_ref).await?;
+    let run_id = run_id_from_session(&session);
 
     // ── Produce: branch mgmt, retry loop, post-run git state ──────────────
     let outcome = produce(
@@ -386,7 +402,7 @@ pub async fn run<R: crate::CommandRunner>(
 
     let finished_at = chrono::Utc::now().to_rfc3339();
     let record = crate::LedgerRecord {
-        run_id: format!("run-{}", outcome.slug),
+        run_id: run_id.clone(),
         plan_id: outcome.slug.clone(),
         repo: inputs.repo.clone(),
         branch: outcome.branch.clone(),
@@ -426,7 +442,38 @@ pub async fn run<R: crate::CommandRunner>(
 
 #[cfg(test)]
 mod tests {
-    use super::{run, RunInputs};
+    use super::{run, run_id_from_session, RunInputs};
+
+    #[test]
+    fn run_id_from_session_well_formed_is_nonempty_and_deterministic() {
+        let session = "session:plan-abc:123456789";
+        let a = run_id_from_session(session);
+        let b = run_id_from_session(session);
+        assert!(!a.is_empty());
+        assert_eq!(a, b);
+        assert_eq!(a, "run-123456789");
+    }
+
+    #[test]
+    fn run_id_from_session_malformed_does_not_panic_and_is_nonempty() {
+        let session = "session:plan-abc";
+        let id = run_id_from_session(session);
+        assert!(!id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ledger_record_run_id_is_nonempty_and_session_derived() {
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(1);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        assert!(!record.run_id.is_empty());
+        assert!(record.run_id.starts_with("run-"));
+    }
     use crate::runner::fake::FakeRunner;
     use crate::{Config, FailureClass};
 

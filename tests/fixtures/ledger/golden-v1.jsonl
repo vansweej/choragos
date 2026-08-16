@@ -1,0 +1,2 @@
+{"schemaVersion":1,"runId":"golden-run-1","ts":"2024-01-01T00:00:00Z","kind":"run_started","phase":1,"step":1,"opId":"op-1"}
+{"schemaVersion":1,"runId":"golden-run-1","ts":"2024-01-01T00:00:01Z","kind":"run_finished","phase":1,"step":1,"opId":"op-2"}

@@ -22,6 +22,9 @@ pub use ledger::LedgerRecord;
 
 pub mod plan;
 
+pub mod ledger_line;
+pub use ledger_line::LedgerLine;
+
 pub mod runner;
 pub use runner::{CommandRunner, Memory, Pipeline, Sink, Vcs};
 

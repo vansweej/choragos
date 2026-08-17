@@ -408,9 +408,12 @@ impl Pipeline for FakeRunner {
         _plan_ref: &str,
         _profile: &str,
         _session: &str,
-    ) -> Result<i32, CoreError> {
+    ) -> Result<crate::runner::Rollup, CoreError> {
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
-        Ok(code)
+        Ok(crate::runner::Rollup {
+            exit_code: code,
+            ..Default::default()
+        })
     }
 }
 
@@ -435,20 +438,20 @@ mod tests {
     async fn scripted_exit_code_is_returned() {
         let mut runner = FakeRunner::new();
         runner.push_exit_code(2);
-        let code = runner
+        let rollup = runner
             .run_plan_cycle("workspace", "plan-ref", "default", "session-1")
             .await
             .expect("run_plan_cycle");
-        assert_eq!(code, 2);
+        assert_eq!(rollup.exit_code, 2);
     }
 
     #[tokio::test]
     async fn default_exit_code_is_zero_when_queue_empty() {
         let runner = FakeRunner::new();
-        let code = runner
+        let rollup = runner
             .run_plan_cycle("workspace", "plan-ref", "default", "session-1")
             .await
             .expect("run_plan_cycle");
-        assert_eq!(code, 0);
+        assert_eq!(rollup.exit_code, 0);
     }
 }

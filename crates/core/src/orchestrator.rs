@@ -111,7 +111,8 @@ async fn produce<R: crate::CommandRunner>(
             .await;
         code = runner
             .run_plan_cycle(&inputs.workspace, &inputs.plan_ref, profile, session)
-            .await?;
+            .await?
+            .exit_code;
         attempts = attempt;
         if code == 0 || code == 3 {
             break;

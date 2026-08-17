@@ -282,7 +282,7 @@ impl Pipeline for RealRunner {
         plan_ref: &str,
         profile: &str,
         session: &str,
-    ) -> Result<i32, CoreError> {
+    ) -> Result<crate::runner::Rollup, CoreError> {
         let run_id = crate::orchestrator::run_id_from_session(session);
         let status = tokio::process::Command::new("bun")
             .args([
@@ -310,7 +310,10 @@ impl Pipeline for RealRunner {
                 message: e.to_string(),
             })?;
 
-        Ok(status.code().unwrap_or(3))
+        Ok(crate::runner::Rollup {
+            exit_code: status.code().unwrap_or(3),
+            ..Default::default()
+        })
     }
 }
 

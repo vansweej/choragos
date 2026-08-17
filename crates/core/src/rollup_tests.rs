@@ -35,7 +35,9 @@ async fn happy_path_green_with_pr() {
     runner.push_exit_code(0);
     runner.set_commits_ahead(1);
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Green);
     assert!(record.pr_url.is_some());
@@ -48,7 +50,9 @@ async fn missing_ledger_correlation_prevents_green() {
     runner.set_commits_ahead(1);
     runner.set_include_ledger_correlation(false);
 
-    let record = run(&runner, &test_cfg(1), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(1), test_inputs())
+        .await
+        .expect("run");
 
     assert_ne!(record.failure_class, FailureClass::Green);
     assert!(
@@ -65,7 +69,9 @@ async fn post_run_dirty_tree_invariant() {
     runner.set_commits_ahead(1);
     runner.set_post_run_tree_dirty(true);
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Red);
     assert!(record.reason.as_deref().unwrap_or("").contains("dirty"));
@@ -79,7 +85,9 @@ async fn stale_head_invariant() {
     runner.set_branch_exists(false);
     runner.set_branch_contains(false);
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Red);
     let reason = record.reason.as_deref().unwrap_or("");
@@ -96,7 +104,9 @@ async fn pr_creation_failure_degrades_gracefully() {
     runner.set_commits_ahead(1);
     runner.set_create_pr_should_fail(true);
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Green);
     assert!(record.pr_url.is_none());
@@ -114,7 +124,9 @@ async fn existing_pr_is_reused() {
     runner.set_commits_ahead(1);
     runner.set_existing_pr(Some("https://github.com/x/y/pull/9"));
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Green);
     assert_eq!(
@@ -132,7 +144,9 @@ async fn no_changes_to_land() {
     runner.push_exit_code(0);
     runner.set_commits_ahead(0);
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Green);
     assert!(record.pr_url.is_none());
@@ -145,7 +159,9 @@ async fn orange_after_exhausted_retries() {
     runner.set_exit_codes([2, 2, 2]);
     runner.set_commits_ahead(1);
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Orange);
     assert!(record.pr_url.is_none());
@@ -161,7 +177,9 @@ async fn red_on_hard_failure_exit_code() {
     let mut runner = FakeRunner::new();
     runner.push_exit_code(3);
 
-    let record = run(&runner, &test_cfg(3), test_inputs()).await.expect("run");
+    let record = run(&runner, &test_cfg(3), test_inputs())
+        .await
+        .expect("run");
 
     assert_eq!(record.failure_class, FailureClass::Red);
     assert!(record.pr_url.is_none());

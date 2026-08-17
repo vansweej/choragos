@@ -177,3 +177,70 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod worst_exit_code_tests {
+    use super::worst_exit_code;
+    use choragos_core::{FailureClass, LedgerRecord};
+
+    fn make_record(failure_class: FailureClass) -> LedgerRecord {
+        LedgerRecord {
+            run_id: "run-1".to_string(),
+            plan_id: "plan-1".to_string(),
+            repo: "repo".to_string(),
+            branch: "feat/x".to_string(),
+            profile: "default".to_string(),
+            exit_code: 0,
+            attempts: 1,
+            failure_class,
+            base_sha: "abc".to_string(),
+            head_sha: "def".to_string(),
+            commits_ahead: 1,
+            pr_url: None,
+            reason: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            finished_at: "2024-01-01T00:01:00Z".to_string(),
+            schema_version: 3,
+            change_id: None,
+        }
+    }
+
+    #[test]
+    fn empty_slice_is_red() {
+        assert_eq!(worst_exit_code(&[]), 2);
+    }
+
+    #[test]
+    fn single_green_record_is_zero() {
+        let records = [make_record(FailureClass::Green)];
+        assert_eq!(worst_exit_code(&records), 0);
+    }
+
+    #[test]
+    fn single_orange_record_is_one() {
+        let records = [make_record(FailureClass::Orange)];
+        assert_eq!(worst_exit_code(&records), 1);
+    }
+
+    #[test]
+    fn single_red_record_is_two() {
+        let records = [make_record(FailureClass::Red)];
+        assert_eq!(worst_exit_code(&records), 2);
+    }
+
+    #[test]
+    fn worst_of_mixed_batch_wins() {
+        let records = [make_record(FailureClass::Green), make_record(FailureClass::Orange)];
+        assert_eq!(worst_exit_code(&records), 1);
+    }
+
+    #[test]
+    fn red_beats_everything() {
+        let records = [
+            make_record(FailureClass::Green),
+            make_record(FailureClass::Orange),
+            make_record(FailureClass::Red),
+        ];
+        assert_eq!(worst_exit_code(&records), 2);
+    }
+}

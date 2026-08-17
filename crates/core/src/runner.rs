@@ -98,16 +98,33 @@ pub trait Vcs: Send + Sync {
     ) -> impl Future<Output = Result<String, crate::CoreError>> + Send;
 }
 
+/// Result of a plan-cycle executor invocation.
+///
+/// Carries the raw exit code plus placeholder fields for future
+/// correlation data (populated by later subplans) such as the executor's
+/// own run id or the path to its ledger output.
+#[derive(Debug, Clone, Default)]
+pub struct Rollup {
+    /// Raw process exit code returned by the plan-cycle executor.
+    pub exit_code: i32,
+    /// The executor's own run id, if captured. Reserved for future use.
+    pub run_id: Option<String>,
+    /// Path to the executor's ledger output, if captured. Reserved for
+    /// future use.
+    pub ledger_path: Option<String>,
+}
+
 /// Execution of the ai-coding plan-cycle pipeline.
 pub trait Pipeline: Send + Sync {
-    /// Runs the ai-coding plan-cycle executor and returns its exit code.
+    /// Runs the ai-coding plan-cycle executor and returns a [`Rollup`]
+    /// describing its outcome.
     fn run_plan_cycle(
         &self,
         workspace: &str,
         plan_ref: &str,
         profile: &str,
         session: &str,
-    ) -> impl Future<Output = Result<i32, crate::CoreError>> + Send;
+    ) -> impl Future<Output = Result<Rollup, crate::CoreError>> + Send;
 }
 
 /// Cerebrum-backed plan storage and session-scoped progress notes.

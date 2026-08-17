@@ -112,6 +112,13 @@ pub struct FakeRunner {
     ///
     /// [`create_pr`]: Vcs::create_pr
     pub create_pr_calls: Mutex<u32>,
+    /// When `true` (the default), [`run_plan_cycle`] returns a `Rollup`
+    /// with a populated `run_id`, `ledger_path`, and non-empty
+    /// `ledger_lines`, simulating a properly-correlated green run. Set to
+    /// `false` to simulate a missing/uncorrelated ledger.
+    ///
+    /// [`run_plan_cycle`]: Pipeline::run_plan_cycle
+    pub include_ledger_correlation: Mutex<bool>,
 }
 
 impl FakeRunner {
@@ -130,8 +137,19 @@ impl FakeRunner {
             scripted_head_sha: Mutex::new("sha-base".to_string()),
             scripted_commits_ahead: Mutex::new(1),
             plan_contents: Mutex::new("# Feature: test plan\n\nsome body".to_string()),
+            include_ledger_correlation: Mutex::new(true),
             ..Default::default()
         }
+    }
+
+    /// Controls whether [`run_plan_cycle`] returns a correlated ledger
+    /// (see [`include_ledger_correlation`]).
+    ///
+    /// [`run_plan_cycle`]: crate::Pipeline::run_plan_cycle
+    /// [`include_ledger_correlation`]: FakeRunner::include_ledger_correlation
+    pub fn set_include_ledger_correlation(&mut self, value: bool) -> &mut Self {
+        *self.include_ledger_correlation.lock().unwrap() = value;
+        self
     }
 
     // ── builder-style setters ────────────────────────────────────────────
@@ -410,9 +428,29 @@ impl Pipeline for FakeRunner {
         _session: &str,
     ) -> Result<crate::runner::Rollup, CoreError> {
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
+        let (run_id, ledger_path, ledger_lines) = if *self.include_ledger_correlation.lock().unwrap() {
+            (
+                Some("run-fake-1".to_string()),
+                Some("/tmp/fake-ledger.jsonl".to_string()),
+                vec![crate::LedgerLine {
+                    schema_version: 1,
+                    run_id: "run-fake-1".to_string(),
+                    ts: "2024-01-01T00:00:00Z".to_string(),
+                    kind: "run_finished".to_string(),
+                    phase: None,
+                    step: None,
+                    op_id: None,
+                    payload: serde_json::Value::Null,
+                }],
+            )
+        } else {
+            (None, None, Vec::new())
+        };
         Ok(crate::runner::Rollup {
             exit_code: code,
-            ..Default::default()
+            run_id,
+            ledger_path,
+            ledger_lines,
         })
     }
 }

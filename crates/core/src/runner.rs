@@ -112,6 +112,9 @@ pub struct Rollup {
     /// Path to the executor's ledger output, if captured. Reserved for
     /// future use.
     pub ledger_path: Option<String>,
+    /// Ledger lines correlated by `run_id` (this run's own lines only).
+    /// Empty when the ledger could not be read or no lines correlated.
+    pub ledger_lines: Vec<crate::LedgerLine>,
 }
 
 /// Execution of the ai-coding plan-cycle pipeline.

@@ -105,15 +105,32 @@ async fn produce<R: crate::CommandRunner>(
     // ── Retry loop ────────────────────────────────────────────────────────
     let mut code = 0i32;
     let mut attempts = 0u32;
+    let mut ledger_correlation_reason: Option<String> = None;
     for attempt in 1..=cfg.max_attempts {
         let _ = runner
             .note_progress(session, &format!("attempt {attempt} started"))
             .await;
-        code = runner
+        let rollup = runner
             .run_plan_cycle(&inputs.workspace, &inputs.plan_ref, profile, session)
-            .await?
-            .exit_code;
+            .await?;
+        code = rollup.exit_code;
         attempts = attempt;
+
+        if code == 0 {
+            let run_id_ok = rollup.run_id.as_deref().is_some_and(|s| !s.is_empty());
+            let ledger_path_ok = rollup.ledger_path.is_some();
+            let ledger_lines_ok = !rollup.ledger_lines.is_empty();
+            if !(run_id_ok && ledger_path_ok && ledger_lines_ok) {
+                code = 2;
+                ledger_correlation_reason = Some(format!(
+                    "diagnosis: missing or empty ledger correlation (run_id present: {run_id_ok}, \
+                     ledger_path present: {ledger_path_ok}, ledger_lines non-empty: {ledger_lines_ok}) \
+                     — a technically-successful exit must not be reported green without its own \
+                     ledger being found and correlated"
+                ));
+            }
+        }
+
         if code == 0 || code == 3 {
             break;
         }
@@ -399,7 +416,12 @@ pub async fn run<R: crate::CommandRunner>(
     .await?;
 
     // ── Publish: failure-class + idempotent find-or-create PR decision ───
-    let (failure_class, pr_url, reason) = publish(runner, &outcome, trunk).await;
+    let (failure_class, pr_url, mut reason) = publish(runner, &outcome, trunk).await;
+    if reason.is_none() {
+        reason = ledger_correlation_reason;
+    } else if let Some(extra) = ledger_correlation_reason {
+        reason = Some(format!("{} ({extra})", reason.unwrap()));
+    }
 
     let finished_at = chrono::Utc::now().to_rfc3339();
     let record = crate::LedgerRecord {
@@ -460,6 +482,45 @@ mod tests {
         let session = "session:plan-abc";
         let id = run_id_from_session(session);
         assert!(!id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_ledger_correlation_prevents_green_and_names_diagnosis() {
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(1);
+        runner.set_include_ledger_correlation(false);
+        // Force red-hard-failure-avoidance: without correlation, exit 0
+        // becomes 2 (retry-eligible), which after max_attempts exhausts to
+        // Orange, never Green.
+        let record = run(&runner, &test_cfg(1), test_inputs())
+            .await
+            .expect("run");
+
+        assert_ne!(record.failure_class, FailureClass::Green);
+        assert!(
+            record
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("diagnosis"),
+            "reason must mention 'diagnosis', got: {:?}",
+            record.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn present_ledger_correlation_allows_green() {
+        let mut runner = FakeRunner::new();
+        runner.push_exit_code(0);
+        runner.set_commits_ahead(1);
+        runner.set_include_ledger_correlation(true);
+
+        let record = run(&runner, &test_cfg(3), test_inputs())
+            .await
+            .expect("run");
+
+        assert_eq!(record.failure_class, FailureClass::Green);
     }
 
     #[tokio::test]

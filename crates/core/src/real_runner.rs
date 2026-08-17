@@ -284,7 +284,7 @@ impl Pipeline for RealRunner {
         session: &str,
     ) -> Result<crate::runner::Rollup, CoreError> {
         let run_id = crate::orchestrator::run_id_from_session(session);
-        let status = tokio::process::Command::new("bun")
+        let output = tokio::process::Command::new("bun")
             .args([
                 "run",
                 "--cwd",
@@ -303,16 +303,30 @@ impl Pipeline for RealRunner {
                 "--verbose",
             ])
             .stderr(std::process::Stdio::inherit())
-            .status()
+            .output()
             .await
             .map_err(|e| CoreError::Command {
                 context: "bun run pipeline plan-cycle".to_string(),
                 message: e.to_string(),
             })?;
 
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let locator_re = regex::Regex::new(r"^CHORAGOS-LEDGER runId=(\S+) path=(.+)$")
+            .expect("locator regex is valid");
+        let mut executor_run_id = None;
+        let mut ledger_path = None;
+        for line in stdout.lines() {
+            if let Some(caps) = locator_re.captures(line.trim_end()) {
+                executor_run_id = caps.get(1).map(|m| m.as_str().to_string());
+                ledger_path = caps.get(2).map(|m| m.as_str().to_string());
+                break;
+            }
+        }
+
         Ok(crate::runner::Rollup {
-            exit_code: status.code().unwrap_or(3),
-            ..Default::default()
+            exit_code: output.status.code().unwrap_or(3),
+            run_id: executor_run_id,
+            ledger_path,
         })
     }
 }

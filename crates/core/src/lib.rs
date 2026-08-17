@@ -44,6 +44,9 @@ pub use real_runner::RealRunner;
 mod dry_run_tests;
 
 #[cfg(test)]
+mod rollup_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn smoke() {

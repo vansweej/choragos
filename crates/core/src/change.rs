@@ -119,6 +119,7 @@ pub async fn run_multi<R, F, Fut>(
     cfg: &crate::Config,
     manifest: ChangeManifest,
     change_id: Option<&str>,
+    dry_run: bool,
     make_runner: F,
 ) -> Vec<crate::LedgerRecord>
 where
@@ -147,7 +148,7 @@ where
                 .clone()
                 .unwrap_or_else(crate::orchestrator::RunInputs::default_trunk),
             change_id: change_id.map(str::to_string),
-            dry_run: false,
+            dry_run,
         };
 
         let record = match crate::orchestrator::run(&runner, cfg, inputs).await {

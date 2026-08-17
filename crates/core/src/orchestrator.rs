@@ -99,20 +99,24 @@ async fn produce<R: crate::CommandRunner>(
     branch: &str,
     slug: &str,
     title: &str,
+    dry_run: bool,
 ) -> Result<ProduceOutcome, crate::CoreError> {
-    if runner.branch_exists(branch).await? {
-        runner.switch_branch(branch).await?;
-    } else {
-        runner.create_branch(branch).await?;
+    if !dry_run {
+        if runner.branch_exists(branch).await? {
+            runner.switch_branch(branch).await?;
+        } else {
+            runner.create_branch(branch).await?;
+        }
     }
 
-    // ── Retry loop ────────────────────────────────────────────────────────
+    // ── Retry loop (or single dry-run pass) ─────────────────────────────
     let mut code = 0i32;
     let mut attempts = 0u32;
     let mut ledger_correlation_reason: Option<String> = None;
-    for attempt in 1..=cfg.max_attempts {
+
+    if dry_run {
         let _ = runner
-            .note_progress(session, &format!("attempt {attempt} started"))
+            .note_progress(session, "attempt 1 started")
             .await;
         let rollup = runner
             .run_plan_cycle(
@@ -120,31 +124,48 @@ async fn produce<R: crate::CommandRunner>(
                 &inputs.plan_ref,
                 profile,
                 session,
-                inputs.dry_run,
+                true,
             )
             .await?;
         code = rollup.exit_code;
-        attempts = attempt;
+        attempts = 1;
+    } else {
+        for attempt in 1..=cfg.max_attempts {
+            let _ = runner
+                .note_progress(session, &format!("attempt {attempt} started"))
+                .await;
+            let rollup = runner
+                .run_plan_cycle(
+                    &inputs.workspace,
+                    &inputs.plan_ref,
+                    profile,
+                    session,
+                    inputs.dry_run,
+                )
+                .await?;
+            code = rollup.exit_code;
+            attempts = attempt;
 
-        if code == 0 {
-            let run_id_ok = rollup.run_id.as_deref().is_some_and(|s| !s.is_empty());
-            let ledger_path_ok = rollup.ledger_path.is_some();
-            let ledger_lines_ok = !rollup.ledger_lines.is_empty();
-            if !(run_id_ok && ledger_path_ok && ledger_lines_ok) {
-                code = 2;
-                ledger_correlation_reason = Some(format!(
-                    "diagnosis: missing or empty ledger correlation (run_id present: {run_id_ok}, \
-                     ledger_path present: {ledger_path_ok}, ledger_lines non-empty: {ledger_lines_ok}) \
-                     — a technically-successful exit must not be reported green without its own \
-                     ledger being found and correlated"
-                ));
+            if code == 0 {
+                let run_id_ok = rollup.run_id.as_deref().is_some_and(|s| !s.is_empty());
+                let ledger_path_ok = rollup.ledger_path.is_some();
+                let ledger_lines_ok = !rollup.ledger_lines.is_empty();
+                if !(run_id_ok && ledger_path_ok && ledger_lines_ok) {
+                    code = 2;
+                    ledger_correlation_reason = Some(format!(
+                        "diagnosis: missing or empty ledger correlation (run_id present: {run_id_ok}, \
+                         ledger_path present: {ledger_path_ok}, ledger_lines non-empty: {ledger_lines_ok}) \
+                         — a technically-successful exit must not be reported green without its own \
+                         ledger being found and correlated"
+                    ));
+                }
             }
-        }
 
-        if code == 0 || code == 3 {
-            break;
+            if code == 0 || code == 3 {
+                break;
+            }
+            // code == 2: continue retrying
         }
-        // code == 2: continue retrying
     }
 
     // ── Post-run state ────────────────────────────────────────────────────
@@ -423,45 +444,73 @@ pub async fn run<R: crate::CommandRunner>(
     // ── Produce: branch mgmt, retry loop, post-run git state ──────────────
     let outcome = produce(
         runner, cfg, &inputs, &profile, &session, &base_sha, &branch, &slug, &title,
+        inputs.dry_run,
     )
     .await?;
 
-    // ── Publish: failure-class + idempotent find-or-create PR decision ───
-    let (failure_class, pr_url, mut reason) = publish(runner, &outcome, trunk).await;
-    if reason.is_none() {
-        reason = outcome.ledger_correlation_reason.clone();
-    } else if let Some(extra) = outcome.ledger_correlation_reason.clone() {
-        reason = Some(format!("{} ({extra})", reason.unwrap()));
-    }
-
     let finished_at = chrono::Utc::now().to_rfc3339();
-    let record = crate::LedgerRecord {
-        run_id: run_id.clone(),
-        plan_id: outcome.slug.clone(),
-        repo: inputs.repo.clone(),
-        branch: outcome.branch.clone(),
-        profile: profile.clone(),
-        exit_code: outcome.exit_code,
-        attempts: outcome.attempts,
-        failure_class,
-        base_sha: outcome.base_sha.clone(),
-        head_sha: outcome.head_sha.clone(),
-        commits_ahead: outcome.commits_ahead,
-        pr_url,
-        reason,
-        started_at,
-        finished_at,
-        schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
-        change_id: inputs.change_id.clone(),
+
+    let record = if inputs.dry_run {
+        // ── Dry-run: skip publish (push/PR) entirely ──────────────────────
+        let failure_class = crate::FailureClass::from_exit_code(outcome.exit_code);
+        crate::LedgerRecord {
+            run_id: run_id.clone(),
+            plan_id: outcome.slug.clone(),
+            repo: inputs.repo.clone(),
+            branch: outcome.branch.clone(),
+            profile: profile.clone(),
+            exit_code: outcome.exit_code,
+            attempts: outcome.attempts,
+            failure_class,
+            base_sha: outcome.base_sha.clone(),
+            head_sha: outcome.head_sha.clone(),
+            commits_ahead: outcome.commits_ahead,
+            pr_url: None,
+            reason: Some("dry run: no branch/push/PR/ledger side effects performed".to_string()),
+            started_at,
+            finished_at,
+            schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+            change_id: inputs.change_id.clone(),
+        }
+    } else {
+        // ── Publish: failure-class + idempotent find-or-create PR decision ───
+        let (failure_class, pr_url, mut reason) = publish(runner, &outcome, trunk).await;
+        if reason.is_none() {
+            reason = outcome.ledger_correlation_reason.clone();
+        } else if let Some(extra) = outcome.ledger_correlation_reason.clone() {
+            reason = Some(format!("{} ({extra})", reason.unwrap()));
+        }
+
+        let record = crate::LedgerRecord {
+            run_id: run_id.clone(),
+            plan_id: outcome.slug.clone(),
+            repo: inputs.repo.clone(),
+            branch: outcome.branch.clone(),
+            profile: profile.clone(),
+            exit_code: outcome.exit_code,
+            attempts: outcome.attempts,
+            failure_class,
+            base_sha: outcome.base_sha.clone(),
+            head_sha: outcome.head_sha.clone(),
+            commits_ahead: outcome.commits_ahead,
+            pr_url,
+            reason,
+            started_at,
+            finished_at,
+            schema_version: crate::ledger::CURRENT_SCHEMA_VERSION,
+            change_id: inputs.change_id.clone(),
+        };
+
+        // Append ledger (propagate errors — caller may want to know).
+        runner.append_ledger(&record).await?;
+
+        // Send Telegram best-effort: log and swallow any error.
+        if let Err(e) = runner.send_telegram(&render(&record)).await {
+            eprintln!("choragos: telegram notification failed (ignored): {e}");
+        }
+
+        record
     };
-
-    // Append ledger (propagate errors — caller may want to know).
-    runner.append_ledger(&record).await?;
-
-    // Send Telegram best-effort: log and swallow any error.
-    if let Err(e) = runner.send_telegram(&render(&record)).await {
-        eprintln!("choragos: telegram notification failed (ignored): {e}");
-    }
 
     // Clean up the cerebrum session best-effort: log and swallow any error.
     // This is a SCOPED cleanup of this session's own memories only — never a

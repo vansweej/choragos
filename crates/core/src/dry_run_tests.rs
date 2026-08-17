@@ -41,7 +41,10 @@ async fn dry_run_true_is_recorded_on_run_plan_cycle_calls() {
 
     let flags = runner.run_plan_cycle_dry_run_flags.lock().unwrap();
     assert_eq!(flags.len(), 1);
-    assert!(flags[0], "dry_run=true must be passed through to run_plan_cycle");
+    assert!(
+        flags[0],
+        "dry_run=true must be passed through to run_plan_cycle"
+    );
 }
 
 #[tokio::test]
@@ -56,7 +59,10 @@ async fn dry_run_false_is_recorded_on_run_plan_cycle_calls() {
 
     let flags = runner.run_plan_cycle_dry_run_flags.lock().unwrap();
     assert_eq!(flags.len(), 1);
-    assert!(!flags[0], "dry_run=false must be passed through to run_plan_cycle");
+    assert!(
+        !flags[0],
+        "dry_run=false must be passed through to run_plan_cycle"
+    );
 }
 
 #[tokio::test]

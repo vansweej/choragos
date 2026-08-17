@@ -200,12 +200,18 @@ mod tests {
             repos: vec![job("/repo-a", true), job("/repo-b", true)],
         };
 
-        let records = super::run_multi(&test_cfg(), manifest, Some("change-123"), |_job| async {
-            let mut runner = FakeRunner::new();
-            runner.push_exit_code(0);
-            runner.set_commits_ahead(1);
-            runner
-        })
+        let records = super::run_multi(
+            &test_cfg(),
+            manifest,
+            Some("change-123"),
+            false,
+            |_job| async {
+                let mut runner = FakeRunner::new();
+                runner.push_exit_code(0);
+                runner.set_commits_ahead(1);
+                runner
+            },
+        )
         .await;
 
         assert_eq!(records.len(), 2, "both repos should have run");
@@ -226,7 +232,7 @@ mod tests {
             repos: vec![job("/repo-a", true), job("/repo-b", true)],
         };
 
-        let records = super::run_multi(&test_cfg(), manifest, None, |job| {
+        let records = super::run_multi(&test_cfg(), manifest, None, false, |job| {
             let workspace = job.workspace.clone();
             async move {
                 let mut runner = FakeRunner::new();
@@ -256,7 +262,7 @@ mod tests {
             repos: vec![job("/repo-a", false), job("/repo-b", true)],
         };
 
-        let records = super::run_multi(&test_cfg(), manifest, None, |job| {
+        let records = super::run_multi(&test_cfg(), manifest, None, false, |job| {
             let workspace = job.workspace.clone();
             async move {
                 let mut runner = FakeRunner::new();
@@ -286,7 +292,7 @@ mod tests {
             repos: vec![job("/repo-a", true)],
         };
 
-        let records = super::run_multi(&test_cfg(), manifest, None, |_job| async {
+        let records = super::run_multi(&test_cfg(), manifest, None, false, |_job| async {
             let mut runner = FakeRunner::new();
             runner.set_fetch_plan_should_fail(true);
             runner

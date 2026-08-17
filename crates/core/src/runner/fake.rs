@@ -119,6 +119,11 @@ pub struct FakeRunner {
     ///
     /// [`run_plan_cycle`]: Pipeline::run_plan_cycle
     pub include_ledger_correlation: Mutex<bool>,
+    /// The `dry_run` argument passed to each [`run_plan_cycle`] call, in
+    /// call order.
+    ///
+    /// [`run_plan_cycle`]: Pipeline::run_plan_cycle
+    pub run_plan_cycle_dry_run_flags: Mutex<Vec<bool>>,
 }
 
 impl FakeRunner {
@@ -426,8 +431,12 @@ impl Pipeline for FakeRunner {
         _plan_ref: &str,
         _profile: &str,
         _session: &str,
-        _dry_run: bool,
+        dry_run: bool,
     ) -> Result<crate::runner::Rollup, CoreError> {
+        self.run_plan_cycle_dry_run_flags
+            .lock()
+            .unwrap()
+            .push(dry_run);
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
         let (run_id, ledger_path, ledger_lines) =
             if *self.include_ledger_correlation.lock().unwrap() {

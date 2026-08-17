@@ -103,6 +103,7 @@ impl ChoragosServer {
                 &self.config,
                 manifest,
                 Some(&change_ref),
+                args.dry_run.unwrap_or(false),
                 |job: &choragos_core::RepoJob| {
                     let job = job.clone();
                     let cfg = cfg.clone();

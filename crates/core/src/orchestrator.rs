@@ -115,17 +115,9 @@ async fn produce<R: crate::CommandRunner>(
     let mut ledger_correlation_reason: Option<String> = None;
 
     if dry_run {
-        let _ = runner
-            .note_progress(session, "attempt 1 started")
-            .await;
+        let _ = runner.note_progress(session, "attempt 1 started").await;
         let rollup = runner
-            .run_plan_cycle(
-                &inputs.workspace,
-                &inputs.plan_ref,
-                profile,
-                session,
-                true,
-            )
+            .run_plan_cycle(&inputs.workspace, &inputs.plan_ref, profile, session, true)
             .await?;
         code = rollup.exit_code;
         attempts = 1;
@@ -443,7 +435,15 @@ pub async fn run<R: crate::CommandRunner>(
 
     // ── Produce: branch mgmt, retry loop, post-run git state ──────────────
     let outcome = produce(
-        runner, cfg, &inputs, &profile, &session, &base_sha, &branch, &slug, &title,
+        runner,
+        cfg,
+        &inputs,
+        &profile,
+        &session,
+        &base_sha,
+        &branch,
+        &slug,
+        &title,
         inputs.dry_run,
     )
     .await?;

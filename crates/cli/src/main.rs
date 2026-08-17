@@ -99,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
             &config,
             manifest,
             Some(&change_ref),
+            args.dry_run,
             |job: &choragos_core::RepoJob| {
                 let job = job.clone();
                 let cfg = cfg.clone();

@@ -204,6 +204,18 @@ Every produced `LedgerRecord` has its `change_id` field set to the
 `change_ref` value, correlating the batch's per-repo rows. Cerebrum itself
 is spawned once for the whole batch (not once per repo).
 
+## Coverage baseline
+
+As of this change, `cargo tarpaulin --workspace` reports **83.7%** line
+coverage for the workspace. `crates/cli/src/main.rs` and
+`crates/mcp-server/src/main.rs` are structurally under-covered: both are
+thin CLI/MCP entry-point wiring (`#[cfg(not(tarpaulin_include))] async fn
+main`) with no dedicated process-level integration test harness yet, so
+their `main` bodies are excluded from instrumentation but their surrounding
+argument-handling code is only partially exercised by unit tests. Closing
+this gap to the workspace's 90% target is tracked as a separate follow-up —
+it is not claimed as satisfied by this change.
+
 ## Run-ledger
 
 Every completed run (including clean-start aborts) appends one compact JSON

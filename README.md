@@ -206,15 +206,27 @@ is spawned once for the whole batch (not once per repo).
 
 ## Coverage baseline
 
-As of this change, `cargo tarpaulin --workspace` reports **83.7%** line
-coverage for the workspace. `crates/cli/src/main.rs` and
+As of this change, `cargo tarpaulin --workspace` reports **72.06%** line
+coverage for the workspace (343/476 lines). `crates/cli/src/main.rs` and
 `crates/mcp-server/src/main.rs` are structurally under-covered: both are
-thin CLI/MCP entry-point wiring (`#[cfg(not(tarpaulin_include))] async fn
-main`) with no dedicated process-level integration test harness yet, so
-their `main` bodies are excluded from instrumentation but their surrounding
-argument-handling code is only partially exercised by unit tests. Closing
-this gap to the workspace's 90% target is tracked as a separate follow-up —
-it is not claimed as satisfied by this change.
+thin CLI/MCP entry-point wiring with no dedicated process-level integration
+test harness yet, so their argument-handling and request-dispatch bodies are
+almost entirely unexercised by unit tests (0/7 and 0/62 lines respectively).
+Closing this gap to the workspace's 90% target is tracked as a separate
+follow-up — it is not claimed as satisfied by this change.
+
+Additionally, `orchestrator.rs`'s `produce`/`publish`/`run` functions (all
+`async fn`) show several lines tarpaulin reports as uncovered even after
+adding `rollup_tests.rs`'s behavioral tests that assert on exactly those
+branches' outcomes (e.g. the dirty-tree and stale-HEAD invariant checks, the
+ledger-correlation diagnosis message). This is a known limitation of
+`cargo-tarpaulin`'s ptrace-based instrumentation for `async fn` bodies and
+multi-line macro invocations (e.g. a multi-line `format!` spanning several
+source lines is frequently mis-attributed): the branches ARE exercised —
+each test's assertion on the resulting `LedgerRecord`'s `reason`/
+`failure_class` can only pass if that exact code path executed — but the
+tool's line-level percentage does not reflect it. Line-count coverage
+should be read as a lower bound for this crate, not an exact measure.
 
 ## Run-ledger
 

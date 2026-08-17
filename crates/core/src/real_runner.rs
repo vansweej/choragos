@@ -324,17 +324,15 @@ impl Pipeline for RealRunner {
         }
 
         let ledger_lines = match (&executor_run_id, &ledger_path) {
-            (Some(run_id), Some(path)) => {
-                match tokio::fs::read_to_string(path).await {
-                    Ok(contents) => contents
-                        .lines()
-                        .filter(|l| !l.trim().is_empty())
-                        .filter_map(|l| serde_json::from_str::<crate::LedgerLine>(l).ok())
-                        .filter(|line| &line.run_id == run_id)
-                        .collect(),
-                    Err(_) => Vec::new(),
-                }
-            }
+            (Some(run_id), Some(path)) => match tokio::fs::read_to_string(path).await {
+                Ok(contents) => contents
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .filter_map(|l| serde_json::from_str::<crate::LedgerLine>(l).ok())
+                    .filter(|line| &line.run_id == run_id)
+                    .collect(),
+                Err(_) => Vec::new(),
+            },
             _ => Vec::new(),
         };
 

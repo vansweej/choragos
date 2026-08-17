@@ -24,6 +24,7 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

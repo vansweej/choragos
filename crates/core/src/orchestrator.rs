@@ -75,6 +75,7 @@ struct ProduceOutcome {
     commits_ahead: u32,
     exit_code: i32,
     attempts: u32,
+    ledger_correlation_reason: Option<String>,
 }
 
 /// Runs plan fetch, branch management, the retry loop, and captures
@@ -150,6 +151,7 @@ async fn produce<R: crate::CommandRunner>(
         commits_ahead,
         exit_code: code,
         attempts,
+        ledger_correlation_reason,
     })
 }
 
@@ -418,8 +420,8 @@ pub async fn run<R: crate::CommandRunner>(
     // ── Publish: failure-class + idempotent find-or-create PR decision ───
     let (failure_class, pr_url, mut reason) = publish(runner, &outcome, trunk).await;
     if reason.is_none() {
-        reason = ledger_correlation_reason;
-    } else if let Some(extra) = ledger_correlation_reason {
+        reason = outcome.ledger_correlation_reason.clone();
+    } else if let Some(extra) = outcome.ledger_correlation_reason.clone() {
         reason = Some(format!("{} ({extra})", reason.unwrap()));
     }
 
@@ -499,11 +501,7 @@ mod tests {
 
         assert_ne!(record.failure_class, FailureClass::Green);
         assert!(
-            record
-                .reason
-                .as_deref()
-                .unwrap_or("")
-                .contains("diagnosis"),
+            record.reason.as_deref().unwrap_or("").contains("diagnosis"),
             "reason must mention 'diagnosis', got: {:?}",
             record.reason
         );

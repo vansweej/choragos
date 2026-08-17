@@ -428,24 +428,25 @@ impl Pipeline for FakeRunner {
         _session: &str,
     ) -> Result<crate::runner::Rollup, CoreError> {
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
-        let (run_id, ledger_path, ledger_lines) = if *self.include_ledger_correlation.lock().unwrap() {
-            (
-                Some("run-fake-1".to_string()),
-                Some("/tmp/fake-ledger.jsonl".to_string()),
-                vec![crate::LedgerLine {
-                    schema_version: 1,
-                    run_id: "run-fake-1".to_string(),
-                    ts: "2024-01-01T00:00:00Z".to_string(),
-                    kind: "run_finished".to_string(),
-                    phase: None,
-                    step: None,
-                    op_id: None,
-                    payload: serde_json::Value::Null,
-                }],
-            )
-        } else {
-            (None, None, Vec::new())
-        };
+        let (run_id, ledger_path, ledger_lines) =
+            if *self.include_ledger_correlation.lock().unwrap() {
+                (
+                    Some("run-fake-1".to_string()),
+                    Some("/tmp/fake-ledger.jsonl".to_string()),
+                    vec![crate::LedgerLine {
+                        schema_version: 1,
+                        run_id: "run-fake-1".to_string(),
+                        ts: "2024-01-01T00:00:00Z".to_string(),
+                        kind: "run_finished".to_string(),
+                        phase: None,
+                        step: None,
+                        op_id: None,
+                        payload: serde_json::Value::Null,
+                    }],
+                )
+            } else {
+                (None, None, Vec::new())
+            };
         Ok(crate::runner::Rollup {
             exit_code: code,
             run_id,

@@ -127,6 +127,7 @@ pub trait Pipeline: Send + Sync {
         plan_ref: &str,
         profile: &str,
         session: &str,
+        dry_run: bool,
     ) -> impl Future<Output = Result<Rollup, crate::CoreError>> + Send;
 }
 

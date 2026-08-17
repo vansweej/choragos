@@ -31,6 +31,10 @@ pub struct RunPlanArgs {
     /// Override the auto-derived branch slug.  When omitted the slug is
     /// derived from the plan title. Ignored for `change_ref` runs.
     pub slug: Option<String>,
+
+    /// When `true`, runs the ai-coding S7 dry-run mode (token-free).
+    /// Defaults to `false` when omitted.
+    pub dry_run: Option<bool>,
 }
 
 /// The choragos MCP server.
@@ -142,6 +146,7 @@ impl ChoragosServer {
             slug_override: args.slug,
             trunk: choragos_core::orchestrator::RunInputs::default_trunk(),
             change_id: None,
+            dry_run: args.dry_run.unwrap_or(false),
         };
 
         let record = choragos_core::orchestrator::run(&runner, &self.config, inputs)

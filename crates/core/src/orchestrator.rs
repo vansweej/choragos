@@ -54,6 +54,9 @@ pub struct RunInputs {
     /// just a post-hoc mutation of the returned value, which would miss the
     /// already-written ledger line).
     pub change_id: Option<String>,
+    /// When `true`, runs the ai-coding S7 dry-run mode (token-free), passed
+    /// through to `Pipeline::run_plan_cycle`.
+    pub dry_run: bool,
 }
 
 impl RunInputs {
@@ -112,7 +115,13 @@ async fn produce<R: crate::CommandRunner>(
             .note_progress(session, &format!("attempt {attempt} started"))
             .await;
         let rollup = runner
-            .run_plan_cycle(&inputs.workspace, &inputs.plan_ref, profile, session)
+            .run_plan_cycle(
+                &inputs.workspace,
+                &inputs.plan_ref,
+                profile,
+                session,
+                inputs.dry_run,
+            )
             .await?;
         code = rollup.exit_code;
         attempts = attempt;
@@ -557,6 +566,7 @@ mod tests {
             slug_override: None,
             trunk: RunInputs::default_trunk(),
             change_id: None,
+            dry_run: false,
         }
     }
 

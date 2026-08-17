@@ -147,6 +147,7 @@ where
                 .clone()
                 .unwrap_or_else(crate::orchestrator::RunInputs::default_trunk),
             change_id: change_id.map(str::to_string),
+            dry_run: false,
         };
 
         let record = match crate::orchestrator::run(&runner, cfg, inputs).await {

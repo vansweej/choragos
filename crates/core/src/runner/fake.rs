@@ -426,6 +426,7 @@ impl Pipeline for FakeRunner {
         _plan_ref: &str,
         _profile: &str,
         _session: &str,
+        _dry_run: bool,
     ) -> Result<crate::runner::Rollup, CoreError> {
         let code = self.exit_codes.lock().unwrap().pop_front().unwrap_or(0);
         let (run_id, ledger_path, ledger_lines) =
@@ -478,7 +479,7 @@ mod tests {
         let mut runner = FakeRunner::new();
         runner.push_exit_code(2);
         let rollup = runner
-            .run_plan_cycle("workspace", "plan-ref", "default", "session-1")
+            .run_plan_cycle("workspace", "plan-ref", "default", "session-1", false)
             .await
             .expect("run_plan_cycle");
         assert_eq!(rollup.exit_code, 2);
@@ -488,7 +489,7 @@ mod tests {
     async fn default_exit_code_is_zero_when_queue_empty() {
         let runner = FakeRunner::new();
         let rollup = runner
-            .run_plan_cycle("workspace", "plan-ref", "default", "session-1")
+            .run_plan_cycle("workspace", "plan-ref", "default", "session-1", false)
             .await
             .expect("run_plan_cycle");
         assert_eq!(rollup.exit_code, 0);

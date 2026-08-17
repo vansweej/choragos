@@ -282,26 +282,31 @@ impl Pipeline for RealRunner {
         plan_ref: &str,
         profile: &str,
         session: &str,
+        dry_run: bool,
     ) -> Result<crate::runner::Rollup, CoreError> {
         let run_id = crate::orchestrator::run_id_from_session(session);
+        let mut args = vec![
+            "run".to_string(),
+            "--cwd".to_string(),
+            self.ai_coding_monorepo.clone(),
+            "pipeline".to_string(),
+            "plan-cycle".to_string(),
+            workspace.to_string(),
+            "--plan-ref".to_string(),
+            plan_ref.to_string(),
+            "--session".to_string(),
+            session.to_string(),
+            "--run-id".to_string(),
+            run_id.clone(),
+            "--profile".to_string(),
+            profile.to_string(),
+            "--verbose".to_string(),
+        ];
+        if dry_run {
+            args.push("--dry-run".to_string());
+        }
         let output = tokio::process::Command::new("bun")
-            .args([
-                "run",
-                "--cwd",
-                &self.ai_coding_monorepo,
-                "pipeline",
-                "plan-cycle",
-                workspace,
-                "--plan-ref",
-                plan_ref,
-                "--session",
-                session,
-                "--run-id",
-                &run_id,
-                "--profile",
-                profile,
-                "--verbose",
-            ])
+            .args(&args)
             .stderr(std::process::Stdio::inherit())
             .output()
             .await

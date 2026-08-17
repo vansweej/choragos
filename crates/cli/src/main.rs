@@ -47,6 +47,10 @@ struct Args {
     /// derived from the plan title. Ignored for `--change-ref` runs.
     #[arg(long)]
     slug: Option<String>,
+
+    /// Runs the ai-coding S7 dry-run mode (token-free).
+    #[arg(long)]
+    dry_run: bool,
 }
 
 /// Maps a batch of records to a process exit code reflecting the worst
@@ -139,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
         slug_override: args.slug,
         trunk: choragos_core::orchestrator::RunInputs::default_trunk(),
         change_id: None,
+        dry_run: args.dry_run,
     };
 
     let record = choragos_core::orchestrator::run(&runner, &config, inputs).await?;

@@ -179,6 +179,51 @@ mod tests {
 }
 
 #[cfg(test)]
+mod args_parsing_tests {
+    use super::Args;
+    use clap::Parser;
+
+    #[test]
+    fn plan_ref_alone_parses_ok() {
+        let args = Args::try_parse_from(["choragos", "--plan-ref", "abc"]).unwrap();
+        assert_eq!(args.plan_ref, Some("abc".to_string()));
+    }
+
+    #[test]
+    fn change_ref_alone_parses_ok() {
+        let args = Args::try_parse_from(["choragos", "--change-ref", "xyz"]).unwrap();
+        assert_eq!(args.change_ref, Some("xyz".to_string()));
+    }
+
+    #[test]
+    fn neither_plan_ref_nor_change_ref_is_an_error() {
+        assert!(Args::try_parse_from(["choragos"]).is_err());
+    }
+
+    #[test]
+    fn both_plan_ref_and_change_ref_is_an_error() {
+        assert!(Args::try_parse_from([
+            "choragos",
+            "--plan-ref",
+            "abc",
+            "--change-ref",
+            "xyz"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn dry_run_flag_defaults_to_false_and_can_be_set() {
+        let args = Args::try_parse_from(["choragos", "--plan-ref", "abc"]).unwrap();
+        assert!(!args.dry_run);
+
+        let args =
+            Args::try_parse_from(["choragos", "--plan-ref", "abc", "--dry-run"]).unwrap();
+        assert!(args.dry_run);
+    }
+}
+
+#[cfg(test)]
 mod worst_exit_code_tests {
     use super::worst_exit_code;
     use choragos_core::{FailureClass, LedgerRecord};
